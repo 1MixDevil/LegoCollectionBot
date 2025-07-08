@@ -6,6 +6,8 @@ from sqlalchemy import pool
 from alembic import context
 
 from app.core.db import Base
+from sqlalchemy import text
+
 target_metadata = Base.metadata
 
 # this is the Alembic Config object, which provides
@@ -69,6 +71,8 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {version_schema};"))
+
         context.configure(
             connection=connection,
             version_table_schema=version_schema,

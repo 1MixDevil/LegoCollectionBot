@@ -18,3 +18,12 @@ user_permission_group = Table(
     ),
     schema="auth"
 )
+
+
+permission_group_permissions = Table(
+    "permission_group_permissions",
+    Base.metadata,
+    Column("permission_group_id", Integer, ForeignKey("auth.permission_group.id"), primary_key=True),
+    Column("permission_name_id", Integer, ForeignKey("auth.permissions_name.id"), primary_key=True),
+    schema="auth",
+)
