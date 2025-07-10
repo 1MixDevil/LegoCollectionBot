@@ -4,6 +4,7 @@ class UserBase(BaseModel):
     telegram_username: str = Field(..., example="@alice_in_telegram")
 
 class UserCreate(UserBase):
+    username: str = Field(..., min_length=6, example="secret123")
     telegram_username: str = Field(..., min_length=6, example="secret123")
 
 class UserRead(UserBase):

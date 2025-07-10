@@ -5,10 +5,10 @@ from sqlalchemy import pool
 
 from alembic import context
 
-from app.core.db import Base
-from sqlalchemy import text
+from app.models.associations import user_permission_group, permission_group_permissions
+from app.models.permissions_model import PermissionName, PermissionGroup
+from app.models.user_model import User
 
-target_metadata = Base.metadata
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -19,12 +19,10 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-version_schema = config.get_main_option("version_table_schema")
-
 # add your model's MetaData object here
 # for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
+from app.core.db import Base
+target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
@@ -49,8 +47,10 @@ def run_migrations_offline() -> None:
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
-        version_table_schema=version_schema,
         dialect_opts={"paramstyle": "named"},
+        version_table_schema=target_metadata.schema,
+        include_schemas=True,
+
     )
 
     with context.begin_transaction():
@@ -71,12 +71,11 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {version_schema};"))
-
         context.configure(
             connection=connection,
-            version_table_schema=version_schema,
-            target_metadata=target_metadata
+            target_metadata=target_metadata,
+            version_table_schema=target_metadata.schema,
+            include_schemas=True,
         )
 
         with context.begin_transaction():

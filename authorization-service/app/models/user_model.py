@@ -8,7 +8,7 @@ class User(Base):
     __table_args__ = {"schema": "auth"}
 
     id                 = Column(Integer, primary_key=True, index=True)
-    username           = Column(String, unique=True, nullable=False)
+    username           = Column(String, unique=False, nullable=True)
     telegram_username  = Column(String, unique=True, nullable=False)
 
     permission_groups = relationship(
