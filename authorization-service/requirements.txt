@@ -6,3 +6,6 @@ alembic
 python-dotenv
 passlib[bcrypt]
 pydantic
+pytest
+pytest-asyncio
+httpx
