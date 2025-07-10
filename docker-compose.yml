@@ -12,9 +12,9 @@ services:
 
   authorization-service:
     container_name: 'authorization'
-    build: ./authorization-service
+    build: ./AuthorizationService
     volumes:
-      - ./authorization-service/:/app
+      - ./AuthorizationService/:/app
     ports:
       - "${AUTHORIZATION_PORT}:${AUTHORIZATION_PORT}"
     depends_on:

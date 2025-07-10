@@ -1,0 +1,3 @@
+[submodule "AuthorizationService"]
+	path = AuthorizationService
+	url = https://github.com/1MixDevil/AuthorizationService.git
