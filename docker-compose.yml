@@ -1,0 +1,73 @@
+version: "3.8"
+services:
+  portainer:
+      image: portainer/portainer-ce:latest
+      container_name: portainer
+      ports:
+        - "9000:9000"
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock 
+        - portainer_data:/data 
+      restart: always
+
+  authorization-service:
+    container_name: 'authorization'
+    build: ./AuthorizationService
+    volumes:
+      - ./AuthorizationService/:/app
+    ports:
+      - "${AUTHORIZATION_PORT}:${AUTHORIZATION_PORT}"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    restart: always
+
+  collection-service:
+    container_name: 'collection'
+    build: ./CollectionService
+    volumes:
+      - ./CollectionService/:/app
+    ports:
+      - "${COLLECTION_PORT}:${COLLECTION_PORT}"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    restart: always
+
+  # telegram-bot-service:
+  #   build: ./telegram-bot-service
+  #   container_name: 'telegram'
+  #   volumes:
+  #     - ./telegram-bot-service/:/app
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   restart: always
+
+  db:
+    container_name: 'postgres'
+    image: postgres:13.0-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      - POSTGRES_USER=aml1
+      - POSTGRES_PASSWORD=aml1
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
+  portainer_data:
