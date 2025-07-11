@@ -24,6 +24,20 @@ services:
       - .env
     restart: always
 
+  collection-service:
+    container_name: 'collection'
+    build: ./CollectionService
+    volumes:
+      - ./CollectionService/:/app
+    ports:
+      - "${COLLECTION_PORT}:${COLLECTION_PORT}"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    restart: always
+
   # telegram-bot-service:
   #   build: ./telegram-bot-service
   #   container_name: 'telegram'
