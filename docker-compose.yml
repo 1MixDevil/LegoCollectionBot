@@ -38,17 +38,17 @@ services:
       - .env
     restart: always
 
-  # telegram-bot-service:
-  #   build: ./telegram-bot-service
-  #   container_name: 'telegram'
-  #   volumes:
-  #     - ./telegram-bot-service/:/app
-  #   env_file:
-  #     - .env
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #   restart: always
+  telegram-bot-service:
+    build: ./telegram-bot-service
+    container_name: 'telegram'
+    volumes:
+      - ./telegram-bot-service/:/app
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
 
   db:
     container_name: 'postgres'
