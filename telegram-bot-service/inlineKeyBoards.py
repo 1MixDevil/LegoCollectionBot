@@ -64,3 +64,35 @@ def nav_kb(back: str = None) -> InlineKeyboardMarkup:
         buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=back))
     buttons.append(InlineKeyboardButton("❌ Отмена", callback_data="cancel"))
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+
+def make_suggestions_kb(suggestions: list[dict]) -> InlineKeyboardMarkup:
+    keyboard = []
+    MAX_CALLBACK_LENGTH = 64
+    PREFIX = "select_similar:"
+    MAX_TEXT_LENGTH = 45  # лимит на текст кнопки
+
+    for s in suggestions:
+        serial = s["bricklink_id"]
+        name = s["name"]
+
+        callback_data = PREFIX + serial
+        if len(callback_data.encode("utf-8")) > MAX_CALLBACK_LENGTH:
+            # обрезаем serial, чтобы влез в callback_data
+            max_serial_len = MAX_CALLBACK_LENGTH - len(PREFIX.encode("utf-8"))
+            serial = serial.encode("utf-8")[:max_serial_len].decode("utf-8", errors="ignore")
+            callback_data = PREFIX + serial
+
+        # текст кнопки = name (serial), но name может быть длинным
+        # надо оставить место под " (sw0001)" — включая пробел, скобки и сам артикул
+        suffix = f" ({serial})"
+        max_name_len = MAX_TEXT_LENGTH - len(suffix)
+        display_name = name
+        if len(name) > max_name_len:
+            display_name = name[:max_name_len - 1] + "…"  # -1 под "…" (многоточие)
+
+        display_text = f"{display_name}{suffix}"
+        keyboard.append([InlineKeyboardButton(text=display_text, callback_data=callback_data)])
+
+    keyboard.append([InlineKeyboardButton(text="Отмена", callback_data="cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
