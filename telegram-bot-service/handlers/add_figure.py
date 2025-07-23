@@ -1,4 +1,3 @@
-# handlers/add_figure.py
 from aiogram import Router, types
 from aiogram.fsm.context import FSMContext
 from FMSState import AddFigureState
@@ -9,7 +8,10 @@ router = Router()
 
 @router.callback_query(lambda cb: cb.data == "add")
 async def cb_add(call: types.CallbackQuery, state: FSMContext):
-    await call.message.answer("Введите артикул (bricklink_id) фигурки:")
+    await call.message.answer(
+        "Введите артикул (bricklink_id) фигурки:",
+        reply_markup=nav_kb()  # только «Отмена»
+    )
     await call.message.delete_reply_markup()
     await state.set_state(AddFigureState.waiting_serial)
 
@@ -28,13 +30,22 @@ async def add_serial(message: types.Message, state: FSMContext):
     await state.update_data(serial=serial, user_id=tg_id, settings=settings)
 
     if settings.get("request_price_buy"):
-        await message.answer("Введите цену покупки:")
+        await message.answer(
+            "Введите цену покупки:",
+            reply_markup=nav_kb(back="back_to_serial")
+        )
         await state.set_state(AddFigureState.request_price_buy)
     elif settings.get("request_price_sale"):
-        await message.answer("Введите цену продажи:")
+        await message.answer(
+            "Введите цену продажи:",
+            reply_markup=nav_kb(back="back_to_serial")
+        )
         await state.set_state(AddFigureState.request_price_sale)
     elif settings.get("show_description"):
-        await message.answer("Введите описание фигурки:")
+        await message.answer(
+            "Введите описание фигурки:",
+            reply_markup=nav_kb(back="back_to_serial")
+        )
         await state.set_state(AddFigureState.show_description)
     else:
         await finish_add_figure(message, state)
@@ -44,10 +55,16 @@ async def handle_price_buy(message: types.Message, state: FSMContext):
     await state.update_data(price_buy=message.text.strip())
     data = await state.get_data()
     if data["settings"].get("request_price_sale"):
-        await message.answer("Введите цену продажи:")
+        await message.answer(
+            "Введите цену продажи:",
+            reply_markup=nav_kb(back="back_to_serial")
+        )
         await state.set_state(AddFigureState.request_price_sale)
     elif data["settings"].get("show_description"):
-        await message.answer("Введите описание фигурки:")
+        await message.answer(
+            "Введите описание фигурки:",
+            reply_markup=nav_kb(back="back_to_serial")
+        )
         await state.set_state(AddFigureState.show_description)
     else:
         await finish_add_figure(message, state)
@@ -57,7 +74,10 @@ async def handle_price_sale(message: types.Message, state: FSMContext):
     await state.update_data(price_sale=message.text.strip())
     data = await state.get_data()
     if data["settings"].get("show_description"):
-        await message.answer("Введите описание фигурки:")
+        await message.answer(
+            "Введите описание фигурки:",
+            reply_markup=nav_kb(back="back_to_serial")
+        )
         await state.set_state(AddFigureState.show_description)
     else:
         await finish_add_figure(message, state)

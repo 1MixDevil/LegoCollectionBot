@@ -1,15 +1,17 @@
-# handlers/update_figures.py
 from aiogram import Router, types
 from aiogram.fsm.context import FSMContext
 from FMSState import UpdateFigures
 from HttpRequests import update_figures_list
-from inlineKeyBoards import main_kb
+from inlineKeyBoards import main_kb, nav_kb
 
 router = Router()
 
 @router.callback_query(lambda cb: cb.data == "update")
 async def cb_update(call: types.CallbackQuery, state: FSMContext):
-    await call.message.answer("Введите артикул типа фигурки (sw, lor):")
+    await call.message.answer(
+        "Введите артикул типа фигурки (sw, lor):",
+        reply_markup=nav_kb()
+    )
     await call.message.delete_reply_markup()
     await state.set_state(UpdateFigures.waiting_article)
 

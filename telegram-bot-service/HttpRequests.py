@@ -86,7 +86,7 @@ async def list_user_figures(user_id: str):
 
 async def update_figures_list(article: str):
     url = f"{COLL_BASE}/figure/update_figures/"
-    params = {"article": article, "max_miss": 30}
+    params = {"article": article, "max_miss": 20}
     async with httpx.AsyncClient() as client:
         r = await client.put(url, params=params)
         r.raise_for_status()
