@@ -9,6 +9,7 @@ main_kb = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="/settings",      callback_data="settings")],
     [InlineKeyboardButton(text="/info",          callback_data="info")],
     [InlineKeyboardButton(text="/update",        callback_data="update")],
+    [InlineKeyboardButton(text="/create_tierlist",        callback_data="create_tierlist")],
 ])
 
 confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -94,11 +95,33 @@ def nav_kb(back: str = None) -> InlineKeyboardMarkup:
     buttons.append(InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"))
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
+# Функция навигационной клавиатуры (Назад + Отмена)
+def add_choice_kb() -> InlineKeyboardMarkup:
+    """
+    Создает inline-клавиатуру с двумя кнопками в первой строке и одной кнопкой во второй.
+    """
+    buttons_row1 = [
+        InlineKeyboardButton(text="➕ Добавить одну фигурку", callback_data="add_solo_figure"),
+        InlineKeyboardButton(text="➕➕ Добавить несколько фигурок", callback_data="add_few_figure"),
+    ]
+    buttons_row2 = [
+        InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"),
+    ]
+
+    return InlineKeyboardMarkup(inline_keyboard=[buttons_row1, buttons_row2])
+
 
 def collection_output_kb() -> InlineKeyboardMarkup:
     buttons = [
-        [InlineKeyboardButton(text="🖼️ Тир-лист", callback_data="collection_tierlist")],
-        [InlineKeyboardButton(text="📊 Excel-таблица", callback_data="collection_excel")],
+        [InlineKeyboardButton(text="🗑️ Очистить коллекцию", callback_data="collection_clear")],
+        [InlineKeyboardButton(text="🖼️ Экспортировать коллекцию в тир-лист", callback_data="collection_tierlist")],
+        [InlineKeyboardButton(text="📊 Экспортировать коллекцию в Excel-таблицу", callback_data="collection_excel")],
         [InlineKeyboardButton(text="↩️ Назад", callback_data="main_menu")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def tierlist_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Создать коллаж", callback_data="create_tierlist")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
+    ])

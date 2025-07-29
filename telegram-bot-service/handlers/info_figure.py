@@ -3,7 +3,7 @@ import httpx
 from aiogram import Router, types, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile
-from HttpRequests import add_figure_to_user, delete_figure_to_user
+from HttpRequests import add_figure_to_user, delete_figure_to_user, fetch_similar_serials
 from inlineKeyBoards import main_kb, make_info_kb, make_suggestions_kb, nav_kb
 from FMSState import InfoFigures
 from config import COLL_BASE
@@ -146,13 +146,3 @@ async def cb_info_actions(call: types.CallbackQuery):
         await call.answer("Фигурка удалена!", show_alert=True)
     else:
         await call.answer()
-
-async def fetch_similar_serials(serial: str) -> list[str]:
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{COLL_BASE}/figure/similar/",
-            params={"name": serial, "limit": 5, "threshold": 0.3}
-        )
-        if r.status_code == 200:
-            return r.json()
-    return []

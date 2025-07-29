@@ -1,5 +1,3 @@
-# businessLogic/collage.py
-
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 import requests
@@ -26,28 +24,10 @@ class StarWarsCollageGenerator:
         return df[df[name_key].apply(contains_all)]
 
     @staticmethod
-    def fetch_and_prepare_images(
-        records: pd.DataFrame,
-        id_key: str,
-        prefix_url: str,
-        min_height: int,
-        # ваш кастомный arial.ttf можно класть рядом с кодом
-        font_path: str = 'arial.ttf',
-        # базовый размер, можно корректировать
-        font_size: int = 90,
-        user_agent: str = 'Mozilla/5.0'
-    ) -> list:
+    def load_font(font_path: str, font_size: int):
         """
-        Download images from BrickLink, resize, add padding and draw ID text at top.
+        Load a TrueType font from candidates or fallback to default.
         """
-        headers = {'User-Agent': user_agent}
-        images = []
-
-        # Попытка открытия первого доступного шрифта:
-        font = None
-        tried = []
-
-        # Список кандидатов: ваш arial, DejaVu, Liberation
         font_candidates = [
             font_path,
             '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
@@ -55,16 +35,30 @@ class StarWarsCollageGenerator:
         ]
         for fp in font_candidates:
             try:
-                font = ImageFont.truetype(fp, font_size)
-                print(f"Loaded font: {fp}")
-                break
+                return ImageFont.truetype(fp, font_size)
             except IOError:
-                tried.append(fp)
+                continue
+        return ImageFont.load_default()
 
-        if font is None:
-            print(f"Не удалось загрузить шрифты {tried}, используем дефолтный.")
-            font = ImageFont.load_default()
+    @staticmethod
+    def fetch_and_prepare_images(
+        records: pd.DataFrame,
+        id_key: str,
+        prefix_url: str,
+        min_height: int,
+        font_path: str = 'arial.ttf',
+        font_size: int = 90,
+        user_agent: str = 'Mozilla/5.0'
+    ) -> list:
+        """
+        Download images from BrickLink, resize, add padding and draw ID text at top.
+        Returns list of tuples (image, font) where font is used for IDs.
+        """
+        headers = {'User-Agent': user_agent}
+        items = []
 
+        # Load font for IDs
+        id_font = StarWarsCollageGenerator.load_font(font_path, font_size)
         prefix = prefix_url.rstrip('/')
 
         for _, row in records.iterrows():
@@ -72,52 +66,81 @@ class StarWarsCollageGenerator:
             url = f"{prefix}/{id_val}.png"
             resp = requests.get(url, headers=headers)
             if resp.status_code != 200:
-                print(f"Skipping {id_val}: HTTP {resp.status_code}")
                 continue
 
-            # Открываем и масштабируем
             img = Image.open(BytesIO(resp.content))
             new_h = min_height
             new_w = int(new_h * (img.width / img.height))
             img = img.resize((new_w, new_h))
 
-            # Добавляем отступы сверху/снизу
             pad_top, pad_bottom = 150, 150
             canvas = Image.new('RGB', (new_w, new_h + pad_top + pad_bottom), 'white')
             canvas.paste(img, (0, pad_top))
 
-            # Рисуем ID в верхней части
             draw = ImageDraw.Draw(canvas)
-            draw.text((10, 10), id_val, font=font, fill='black')
+            draw.text((10, 10), id_val, font=id_font, fill='black')
 
-            images.append(canvas)
+            items.append((canvas, id_font))
 
-        return images
+        return items
 
     @staticmethod
     def create_collage(
         images: list,
         output_path: str,
         columns: int = 5,
-        max_images: int = None
+        max_images: int = None,
+        title: str = None,
+        font_path: str = 'arial.ttf',
+        font_size: int = 90
     ) -> None:
         """
-        Assemble and save a collage from a list of PIL.Image.
+        Assemble and save a collage from a list of (image, font) tuples passed in `images`.
+        Optionally draw a centered title at the very top using 1.5× the ID font size,
+        and shift the entire image grid below it.
         """
         if not images:
             print("No images to assemble.")
             return
 
-        imgs = images[:max_images] if max_images else images
+        items = images[:max_images] if max_images else images
+        imgs, fonts = zip(*items)
+
         count = len(imgs)
         rows = (count + columns - 1) // columns
         w = max(im.width for im in imgs)
         h = max(im.height for im in imgs)
 
-        collage = Image.new('RGB', (w * columns, h * rows), 'white')
+        # Prepare title font at 1.5× size
+        title_font = None
+        title_margin = 10
+        text_width = text_height = title_padding = 0
+        if title:
+            title_font_size = int(font_size * 1.5)
+            title_font = StarWarsCollageGenerator.load_font(font_path, title_font_size)
+            # measure title
+            dummy_img = Image.new('RGB', (1, 1))
+            dummy_draw = ImageDraw.Draw(dummy_img)
+            bbox = dummy_draw.textbbox((0, 0), title, font=title_font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            title_padding = title_margin + text_height + title_margin
+
+        # Create canvas with space for title
+        collage = Image.new('RGB', (w * columns, h * rows + title_padding), 'white')
+
+        # Draw title at very top
+        if title and title_font:
+            draw = ImageDraw.Draw(collage)
+            x = (collage.width - text_width) // 2
+            y = title_margin
+            draw.text((x, y), title, font=title_font, fill='black')
+
+        # Paste images shifted below title
+        offset_y = title_padding
         for idx, im in enumerate(imgs):
             x = (idx % columns) * w
-            y = (idx // columns) * h
+            y = (idx // columns) * h + offset_y
             collage.paste(im, (x, y))
 
         collage.save(output_path)
@@ -135,13 +158,15 @@ class StarWarsCollageGenerator:
         font_path: str = 'arial.ttf',
         font_size: int = 90,
         columns: int = 5,
-        max_images: int = None
+        max_images: int = None,
+        title: str = None
     ) -> None:
         """
         Full pipeline: filter, download, prepare and assemble collage.
+        Optional title appears centered at the very top of the collage in 1.5× font size.
         """
         df = StarWarsCollageGenerator.filter_by_keyword(data, name_key, keyword)
-        images = StarWarsCollageGenerator.fetch_and_prepare_images(
+        items = StarWarsCollageGenerator.fetch_and_prepare_images(
             records=df,
             id_key=id_key,
             prefix_url=prefix_url,
@@ -149,4 +174,12 @@ class StarWarsCollageGenerator:
             font_path=font_path,
             font_size=font_size
         )
-        StarWarsCollageGenerator.create_collage(images, output_path, columns, max_images)
+        StarWarsCollageGenerator.create_collage(
+            images=items,
+            output_path=output_path,
+            columns=columns,
+            max_images=max_images,
+            title=title,
+            font_path=font_path,
+            font_size=font_size
+        )

@@ -1,6 +1,5 @@
-# handlers/my_collection.py
 from aiogram import Router, types
-from HttpRequests import list_user_figures
+from HttpRequests import list_user_figures, clear_user_collection
 from businessLogic.collage import StarWarsCollageGenerator
 from inlineKeyBoards import main_kb, collection_output_kb
 from aiogram.types import BufferedInputFile
@@ -19,12 +18,22 @@ async def cb_my_collection(call: types.CallbackQuery):
     if not records:
         return await call.message.answer("Ваша коллекция пуста.", reply_markup=main_kb)
 
-    # Сохраним записи во временное хранилище (можно в FSM или базу, но пока просто повторим при выборе)
     await call.message.answer(
-        "Как хотите экспортировать вашу коллекцию?",
+        "Как хотите управлять вашей коллекцией?",
         reply_markup=collection_output_kb()
     )
 
+@router.callback_query(lambda cb: cb.data == "collection_clear")
+async def cb_collection_clear(call: types.CallbackQuery):
+    await call.answer()
+    user_id = str(call.from_user.id)
+
+    # Очищаем коллекцию через API
+    await clear_user_collection(user_id)
+
+    await call.message.answer(
+        "Ваша коллекция успешно очищена!", reply_markup=main_kb
+    )
 
 @router.callback_query(lambda cb: cb.data == "collection_tierlist")
 async def cb_collection_tierlist(call: types.CallbackQuery):
@@ -35,7 +44,7 @@ async def cb_collection_tierlist(call: types.CallbackQuery):
     if not records:
         return await call.message.answer("Ваша коллекция пуста.", reply_markup=main_kb)
 
-    images = StarWarsCollageGenerator.fetch_and_prepare_images(
+    raw = StarWarsCollageGenerator.fetch_and_prepare_images(
         records=StarWarsCollageGenerator.filter_by_keyword(records, name_key='name', keyword=''),
         id_key='bricklink_id',
         prefix_url='https://img.bricklink.com/ItemImage/MN/0/',
@@ -43,6 +52,7 @@ async def cb_collection_tierlist(call: types.CallbackQuery):
         font_path='arial.ttf',
         font_size=90,
     )
+    images = [img for img, _ in raw]
 
     if not images:
         return await call.message.answer("Не удалось подготовить изображения.", reply_markup=main_kb)
@@ -68,10 +78,8 @@ async def cb_collection_tierlist(call: types.CallbackQuery):
     await call.bot.send_document(
         chat_id=call.from_user.id,
         document=document,
-        caption="Вот ваша коллекция в виде тир-листа!",
-        reply_markup=main_kb
+        caption="Вот ваша коллекция в виде тир-листа!", reply_markup=main_kb
     )
-
 
 @router.callback_query(lambda cb: cb.data == "collection_excel")
 async def cb_collection_excel(call: types.CallbackQuery):
@@ -92,6 +100,5 @@ async def cb_collection_excel(call: types.CallbackQuery):
     await call.bot.send_document(
         chat_id=call.from_user.id,
         document=document,
-        caption="Вот ваша коллекция в Excel-формате.",
-        reply_markup=main_kb
+        caption="Вот ваша коллекция в Excel-формате.", reply_markup=main_kb
     )

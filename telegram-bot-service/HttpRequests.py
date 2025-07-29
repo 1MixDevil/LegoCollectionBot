@@ -91,3 +91,39 @@ async def update_figures_list(article: str):
         r = await client.put(url, params=params)
         r.raise_for_status()
         return r.text()
+
+async def fetch_similar_serials(serial: str) -> list[str]:
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{COLL_BASE}/figure/similar/",
+            params={"name": serial, "limit": 5, "threshold": 0.3}
+        )
+        if r.status_code == 200:
+            return r.json()
+    return []
+
+
+async def clear_user_collection(user_id: str):
+    """DELETE /user/{user_id}/collection - удаляет все записи коллекции"""
+    async with httpx.AsyncClient() as client:
+        r = await client.delete(
+            f"{COLL_BASE}/figure/users/{user_id}/collection"
+        )
+        if r.status_code == 204:  # 204 No Content - обычно успешное удаление
+            print("Удаление успешно.")
+        elif r.status_code == 404:
+            print("Фигура не найдена.")
+        else:
+            print(f"Ошибка при удалении: {r.status_code} - {r.text}")
+
+
+async def add_figure_to_user_bulk(payloads: list[dict]) -> list[dict]:
+    """
+    Отправляет список payload'ов на endpoint POST /figure/user/bulk/
+    и возвращает JSON‑ответ (List[FigureToUserRead]).
+    """
+    url = f"{COLL_BASE}/figure/user/bulk/"
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(url, json=payloads)
+        resp.raise_for_status()
+        return resp.json()

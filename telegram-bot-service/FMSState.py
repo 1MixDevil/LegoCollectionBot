@@ -9,6 +9,9 @@ class AddFigureState(StatesGroup):
     is_seller = State()
     show_description = State()
     auto_fill_dates = State()
+    
+class BulkAddState(StatesGroup):
+    waiting_serials = State()
 
 
 class UpdateFigures(StatesGroup):
@@ -22,3 +25,7 @@ class InfoFigures(StatesGroup):
     waiting_serial = State()
 
 
+
+class CreateTierList(StatesGroup):
+    waiting_name_list = State()
+    waiting_serials = State()

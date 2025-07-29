@@ -20,6 +20,7 @@ from handlers.delete_figure import router as delete_figure_router
 from handlers.settings import router as settings_router
 from handlers.info_figure import router as info_figure_router
 from handlers.cancel import router as cancel_router
+from handlers.create_tierlist import router as create_tierlist
 
 
 # === Стартовый хэндлер ===
@@ -68,6 +69,7 @@ async def main():
     dp.include_router(delete_figure_router)
     dp.include_router(info_figure_router)
     dp.include_router(settings_router)
+    dp.include_router(create_tierlist)
 
     # запускаем поллинг
     await dp.start_polling(bot)
