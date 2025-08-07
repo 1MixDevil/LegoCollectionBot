@@ -38,13 +38,12 @@ async def on_name_entered(message: types.Message, state: FSMContext):
     await state.update_data(title=name)
 
     # Переходим к запросу серийников
-    from inlineKeyBoards import tierlist_kb
     text = (
         f"Введите серийные номера фигурок через запятую (,) или точку с запятой (;)."
         f"\nТакже можно ввести __all__ для всех фигурок SW (будут отправлены пачками по {BATCH_SIZE})."
         f"\nМаксимум артикула за раз: {MAX_SERIALS_PER_REQUEST}."
     )
-    await message.answer(text, reply_markup=tierlist_kb())
+    await message.answer(text, reply_markup=nav_kb())
     await state.set_state(CreateTierList.waiting_serials)
 
 

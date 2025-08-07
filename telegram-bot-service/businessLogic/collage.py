@@ -113,7 +113,7 @@ class StarWarsCollageGenerator:
 
         # Prepare title font at 1.5× size
         title_font = None
-        title_margin = 10
+        title_margin = 50
         text_width = text_height = title_padding = 0
         if title:
             title_font_size = int(font_size * 1.5)

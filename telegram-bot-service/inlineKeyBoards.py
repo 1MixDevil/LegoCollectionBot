@@ -2,24 +2,146 @@ from aiogram import types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # === Inline‑клавиатуры ===
+
+# 1. Главное меню
 main_kb = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="/add",           callback_data="add")],
-    [InlineKeyboardButton(text="/delete",        callback_data="delete")],
-    [InlineKeyboardButton(text="/my_collection", callback_data="my_collection")],
-    [InlineKeyboardButton(text="/settings",      callback_data="settings")],
-    [InlineKeyboardButton(text="/info",          callback_data="info")],
-    [InlineKeyboardButton(text="/update",        callback_data="update")],
-    [InlineKeyboardButton(text="/create_tierlist",        callback_data="create_tierlist")],
+    [
+        InlineKeyboardButton(text="📦 Моя коллекция", callback_data="my_collection"),
+        InlineKeyboardButton(text="➕ Добавить",       callback_data="add"),
+    ],
+    [
+        InlineKeyboardButton(text="📋 Желаемое",       callback_data="wishlist"),
+        InlineKeyboardButton(text="🏷 Tier‑лист",      callback_data="create_tierlist"),
+    ],
+    [
+        InlineKeyboardButton(text="🛒 Торговля",        callback_data="marketplace"),
+        InlineKeyboardButton(text="⚙ Настройки",       callback_data="settings"),
+    ],
+    [
+        InlineKeyboardButton(text="❓ Помощь",          callback_data="help"),
+    ],
 ])
 
+# 2. Подменю «Моя коллекция»
+collection_kb = InlineKeyboardMarkup(inline_keyboard=[
+    [
+        InlineKeyboardButton(text="🗒 Показать список", callback_data="my_collection"),
+        InlineKeyboardButton(text="🗑️ Очистить всё",    callback_data="collection_clear"),
+    ],
+    [
+        InlineKeyboardButton(text="📊 Экспорт Excel",   callback_data="collection_excel"),
+    ],
+    [
+        InlineKeyboardButton(text="↩️ Назад",            callback_data="cancel"),
+    ],
+])
+
+# 3. Подменю «Добавить»
+add_kb = InlineKeyboardMarkup(inline_keyboard=[
+    [
+        InlineKeyboardButton(text="➕ Одна фигурка",       callback_data="add_solo_figure"),
+        InlineKeyboardButton(text="➕➕ Несколько фигурок", callback_data="add_few_figure"),
+    ],
+    [
+        InlineKeyboardButton(text="↩️ Назад",              callback_data="cancel"),
+    ],
+])
+
+# 4. Подменю «Желаемое»
+wishlist_kb = InlineKeyboardMarkup(inline_keyboard=[
+    [
+        InlineKeyboardButton(text="📋 Показать список", callback_data="wishlist"),
+        InlineKeyboardButton(text="➕ Добавить",         callback_data="info_action:wishlist"),
+    ],
+    [
+        InlineKeyboardButton(text="🔒 Приватный/Открытый", callback_data="toggle_wishlist_visibility"),
+    ],
+    [
+        InlineKeyboardButton(text="↩️ Назад",              callback_data="cancel"),
+    ],
+])
+
+# 5. Подменю «Tier‑лист»
+tierlist_kb = InlineKeyboardMarkup(inline_keyboard=[
+    [
+        InlineKeyboardButton(text="📑 Мои списки",      callback_data="list_tierlists"),
+        InlineKeyboardButton(text="➕ Создать новый",   callback_data="create_tierlist"),
+    ],
+    [
+        InlineKeyboardButton(text="↩️ Назад",           callback_data="cancel"),
+    ],
+])
+
+# 5.1. Подменю конкретного tier‑листа
+def tierlist_item_kb(tierlist_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🖼 Показать коллаж",    callback_data=f"show_collage:{tierlist_id}"),
+            InlineKeyboardButton(text="➕ Добавить элемент",  callback_data=f"add_to_tierlist:{tierlist_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="➖ Удалить элемент",   callback_data=f"remove_from_tierlist:{tierlist_id}"),
+            InlineKeyboardButton(text="📤 Экспорт в Excel",   callback_data=f"export_tierlist_excel:{tierlist_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="🔤 Переименовать",     callback_data=f"rename_tierlist:{tierlist_id}"),
+            InlineKeyboardButton(text="↩️ Назад",             callback_data="list_tierlists"),
+        ],
+    ])
+
+# 6. Подменю «Торговля»
+marketplace_kb = InlineKeyboardMarkup(inline_keyboard=[
+    [
+        InlineKeyboardButton(text="🛍 Мои объявления", callback_data="my_listings"),
+        InlineKeyboardButton(text="🔎 Все лоты",       callback_data="browse_listings"),
+    ],
+    [
+        InlineKeyboardButton(text="↩️ Назад",           callback_data="cancel"),
+    ],
+])
+
+# 7. Подменю «Настройки»
+settings_kb = InlineKeyboardMarkup(inline_keyboard=[
+    [
+        InlineKeyboardButton(text="🔗 Привязать BrickLink", callback_data="bind_bricklink"),
+    ],
+    [
+        InlineKeyboardButton(text="🔔 Уведомления ON/OFF",   callback_data="toggle_notifications"),
+    ],
+    [
+        InlineKeyboardButton(text="⭐ Premium",              callback_data="premium"),
+    ],
+    [
+        InlineKeyboardButton(text="↩️ Назад",                callback_data="cancel"),
+    ],
+])
+
+# 8. Подменю «Помощь»
+help_kb = InlineKeyboardMarkup(inline_keyboard=[
+    [
+        InlineKeyboardButton(text="📖 FAQ",              callback_data="faq"),
+        InlineKeyboardButton(text="✉️ Обратная связь",   callback_data="feedback"),
+    ],
+    [
+        InlineKeyboardButton(text="↩️ Назад",             callback_data="cancel"),
+    ],
+])
+
+# === Подтверждения ===
 confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Да, удалить", callback_data="confirm_yes")],
     [InlineKeyboardButton(text="Отмена",      callback_data="confirm_no")],
 ])
 
-# Inline‑клавиатура для команды info
-# Добавлена кнопка "❌ Отмена" под кнопкой удаления
-# и разместим в последнем ряду
+# Навигационная клавиатура (Назад + Отмена)
+def nav_kb(back: str = None) -> InlineKeyboardMarkup:
+    buttons = []
+    if back:
+        buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=back))
+    buttons.append(InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"))
+    return InlineKeyboardMarkup(inline_keyboard=[buttons])
+
+# === Существующие функции оставлены без изменений ===
 
 def make_info_kb(serial: str) -> InlineKeyboardMarkup:
     """
@@ -61,7 +183,6 @@ def make_info_kb(serial: str) -> InlineKeyboardMarkup:
         ]
     ])
 
-
 def make_suggestions_kb(suggestions: list[dict]) -> InlineKeyboardMarkup:
     keyboard = []
     MAX_CALLBACK_LENGTH = 64
@@ -87,15 +208,6 @@ def make_suggestions_kb(suggestions: list[dict]) -> InlineKeyboardMarkup:
     keyboard.append([InlineKeyboardButton(text="Отмена", callback_data="cancel")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-# Функция навигационной клавиатуры (Назад + Отмена)
-def nav_kb(back: str = None) -> InlineKeyboardMarkup:
-    buttons = []
-    if back:
-        buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=back))
-    buttons.append(InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"))
-    return InlineKeyboardMarkup(inline_keyboard=[buttons])
-
-# Функция навигационной клавиатуры (Назад + Отмена)
 def add_choice_kb() -> InlineKeyboardMarkup:
     """
     Создает inline-клавиатуру с двумя кнопками в первой строке и одной кнопкой во второй.
@@ -110,17 +222,16 @@ def add_choice_kb() -> InlineKeyboardMarkup:
 
     return InlineKeyboardMarkup(inline_keyboard=[buttons_row1, buttons_row2])
 
-
 def collection_output_kb() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text="🗑️ Очистить коллекцию", callback_data="collection_clear")],
-        [InlineKeyboardButton(text="🖼️ Экспортировать коллекцию в тир-лист", callback_data="collection_tierlist")],
-        [InlineKeyboardButton(text="📊 Экспортировать коллекцию в Excel-таблицу", callback_data="collection_excel")],
-        [InlineKeyboardButton(text="↩️ Назад", callback_data="main_menu")]
+        [InlineKeyboardButton(text="🖼️ Экспортировать коллекцию в тир‑лист", callback_data="collection_tierlist")],
+        [InlineKeyboardButton(text="📊 Экспортировать коллекцию в Excel‑таблицу", callback_data="collection_excel")],
+        [InlineKeyboardButton(text="↩️ Отмена", callback_data="cancel")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def tierlist_kb() -> InlineKeyboardMarkup:
+def tierlist_kb_old() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Создать коллаж", callback_data="create_tierlist")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
