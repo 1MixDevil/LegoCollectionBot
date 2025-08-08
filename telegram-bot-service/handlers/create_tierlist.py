@@ -64,7 +64,7 @@ async def on_serials_entered(message: types.Message, state: FSMContext):
         await message.answer(
             f"❗️ Максимум {MAX_SERIALS_PER_REQUEST} артикула за раз.", reply_markup=nav_kb()
         )
-        await state.clear()
+        await state.set_state(CreateTierList.waiting_serials)
         return
 
     await message.answer("Генерируем ваш тир-лист, подождите...", reply_markup=main_kb)
