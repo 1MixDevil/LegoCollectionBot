@@ -1,8 +1,16 @@
+import logging
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 import requests
 from io import BytesIO
 
+# Настройка логирования
+logger = logging.getLogger(__name__)
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+logger.setLevel(logging.DEBUG)
 
 class StarWarsCollageGenerator:
     @staticmethod
@@ -14,6 +22,7 @@ class StarWarsCollageGenerator:
         """
         Filter list of dicts where name_key contains all words from keyword.
         """
+        logger.info(f"Filtering {len(data)} records by keyword '{keyword}' on key '{name_key}'")
         df = pd.DataFrame(data)
         words = keyword.lower().split()
 
@@ -21,13 +30,16 @@ class StarWarsCollageGenerator:
             text = str(text).lower()
             return all(w in text for w in words)
 
-        return df[df[name_key].apply(contains_all)]
+        filtered = df[df[name_key].apply(contains_all)]
+        logger.info(f"Filtered down to {len(filtered)} records")
+        return filtered
 
     @staticmethod
     def load_font(font_path: str, font_size: int):
         """
         Load a TrueType font from candidates or fallback to default.
         """
+        logger.info(f"Loading font '{font_path}' size {font_size}")
         font_candidates = [
             font_path,
             '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
@@ -35,9 +47,12 @@ class StarWarsCollageGenerator:
         ]
         for fp in font_candidates:
             try:
-                return ImageFont.truetype(fp, font_size)
+                font = ImageFont.truetype(fp, font_size)
+                logger.info(f"Loaded font '{fp}'")
+                return font
             except IOError:
-                continue
+                logger.warning(f"Font path '{fp}' not found, trying next")
+        logger.info("Falling back to default font")
         return ImageFont.load_default()
 
     @staticmethod
@@ -51,37 +66,46 @@ class StarWarsCollageGenerator:
         user_agent: str = 'Mozilla/5.0'
     ) -> list:
         """
-        Download images from BrickLink, resize, add padding and draw ID text at top.
+        Download images, resize, add padding and draw ID text at top.
         Returns list of tuples (image, font) where font is used for IDs.
         """
+        logger.info(f"Starting image fetch for {len(records)} records")
         headers = {'User-Agent': user_agent}
         items = []
 
-        # Load font for IDs
         id_font = StarWarsCollageGenerator.load_font(font_path, font_size)
         prefix = prefix_url.rstrip('/')
 
-        for _, row in records.iterrows():
+        for idx, row in records.iterrows():
             id_val = str(row[id_key])
             url = f"{prefix}/{id_val}.png"
-            resp = requests.get(url, headers=headers)
-            if resp.status_code != 200:
+            logger.debug(f"Fetching image {idx}: {url}")
+            try:
+                resp = requests.get(url, headers=headers, timeout=10)
+                resp.raise_for_status()
+            except Exception as e:
+                logger.error(f"Failed to fetch {url}: {e}")
                 continue
 
-            img = Image.open(BytesIO(resp.content))
-            new_h = min_height
-            new_w = int(new_h * (img.width / img.height))
-            img = img.resize((new_w, new_h))
+            try:
+                img = Image.open(BytesIO(resp.content))
+                new_h = min_height
+                new_w = int(new_h * (img.width / img.height))
+                img = img.resize((new_w, new_h))
 
-            pad_top, pad_bottom = 150, 150
-            canvas = Image.new('RGB', (new_w, new_h + pad_top + pad_bottom), 'white')
-            canvas.paste(img, (0, pad_top))
+                pad_top, pad_bottom = 150, 150
+                canvas = Image.new('RGB', (new_w, new_h + pad_top + pad_bottom), 'white')
+                canvas.paste(img, (0, pad_top))
 
-            draw = ImageDraw.Draw(canvas)
-            draw.text((10, 10), id_val, font=id_font, fill='black')
+                draw = ImageDraw.Draw(canvas)
+                draw.text((10, 10), id_val, font=id_font, fill='black')
 
-            items.append((canvas, id_font))
+                items.append((canvas, id_font))
+                logger.debug(f"Prepared image for ID {id_val}")
+            except Exception as e:
+                logger.error(f"Error processing image {id_val}: {e}")
 
+        logger.info(f"Prepared {len(items)} images out of {len(records)} records")
         return items
 
     @staticmethod
@@ -95,48 +119,40 @@ class StarWarsCollageGenerator:
         font_size: int = 90
     ) -> None:
         """
-        Assemble and save a collage from a list of (image, font) tuples passed in `images`.
-        Optionally draw a centered title at the very top using 1.5× the ID font size,
-        and shift the entire image grid below it.
+        Assemble and save a collage from a list of (image, font) tuples.
         """
-        if not images:
-            print("No images to assemble.")
+        count = len(images)
+        if count == 0:
+            logger.warning("No images to assemble into collage.")
             return
 
         items = images[:max_images] if max_images else images
-        imgs, fonts = zip(*items)
+        imgs, _ = zip(*items)
 
-        count = len(imgs)
-        rows = (count + columns - 1) // columns
         w = max(im.width for im in imgs)
         h = max(im.height for im in imgs)
+        rows = (count + columns - 1) // columns
 
-        # Prepare title font at 1.5× size
-        title_font = None
-        title_margin = 50
-        text_width = text_height = title_padding = 0
+        title_padding = 0
         if title:
-            title_font_size = int(font_size * 1.5)
-            title_font = StarWarsCollageGenerator.load_font(font_path, title_font_size)
+            title_font = StarWarsCollageGenerator.load_font(font_path, int(font_size * 1.5))
             # measure title
-            dummy_img = Image.new('RGB', (1, 1))
-            dummy_draw = ImageDraw.Draw(dummy_img)
-            bbox = dummy_draw.textbbox((0, 0), title, font=title_font)
-            text_width = bbox[2] - bbox[0]
+            dummy = Image.new('RGB', (1, 1))
+            draw = ImageDraw.Draw(dummy)
+            bbox = draw.textbbox((0, 0), title, font=title_font)
             text_height = bbox[3] - bbox[1]
-            title_padding = title_margin + text_height + title_margin
+            title_padding = text_height + 20
+            logger.info(f"Adding title '{title}' with padding {title_padding}")
 
-        # Create canvas with space for title
         collage = Image.new('RGB', (w * columns, h * rows + title_padding), 'white')
 
-        # Draw title at very top
-        if title and title_font:
+        if title:
             draw = ImageDraw.Draw(collage)
-            x = (collage.width - text_width) // 2
-            y = title_margin
+            x = (collage.width - (bbox[2] - bbox[0])) // 2
+            y = 10
             draw.text((x, y), title, font=title_font, fill='black')
 
-        # Paste images shifted below title
+        logger.info(f"Creating collage grid {rows}x{columns}, size {collage.size}")
         offset_y = title_padding
         for idx, im in enumerate(imgs):
             x = (idx % columns) * w
@@ -144,7 +160,7 @@ class StarWarsCollageGenerator:
             collage.paste(im, (x, y))
 
         collage.save(output_path)
-        print(f"Collage saved to {output_path}")
+        logger.info(f"Collage saved to {output_path}")
 
     @staticmethod
     def generate_from_list(
@@ -161,10 +177,6 @@ class StarWarsCollageGenerator:
         max_images: int = None,
         title: str = None
     ) -> None:
-        """
-        Full pipeline: filter, download, prepare and assemble collage.
-        Optional title appears centered at the very top of the collage in 1.5× font size.
-        """
         df = StarWarsCollageGenerator.filter_by_keyword(data, name_key, keyword)
         items = StarWarsCollageGenerator.fetch_and_prepare_images(
             records=df,
