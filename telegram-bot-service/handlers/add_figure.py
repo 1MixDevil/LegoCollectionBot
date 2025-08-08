@@ -1,9 +1,11 @@
 from aiogram import Router, types
 from aiogram.fsm.context import FSMContext
 from FMSState import AddFigureState, BulkAddState
-from HttpRequests import get_user_settings, add_figure_to_user, add_figure_to_user_bulk
+from HttpRequests import get_user_settings, add_figure_to_user, add_figure_to_user_bulk, fetch_similar_serials
 from datetime import date
+from httpx import HTTPStatusError
 
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from inlineKeyBoards import main_kb, nav_kb, add_choice_kb
 import os
 import re
@@ -12,6 +14,24 @@ router = Router()
 
 MAX_SERIALS_PER_REQUEST = int(os.getenv("MAX_SERIALS_PER_REQUEST", 50))
 
+# Сопоставление полей API и русских названий
+FIELD_NAMES_RU = {
+    "price_buy": "Цена покупки",
+    "price_sale": "Цена продажи",
+    "bricklink_id": "Артикул",
+    "description": "Описание",
+    "buy_date": "Дата покупки",
+    "sale_date": "Дата продажи",
+}
+
+# Перевод популярных ошибок Pydantic/FastAPI на русский
+ERROR_MSGS_RU = {
+    "float_parsing": "должно быть числом",
+    "int_parsing": "должно быть целым числом",
+    "string_too_short": "слишком короткое значение",
+    "string_too_long": "слишком длинное значение",
+    "missing": "обязательное поле",
+}
 # Шаг 1: пользователь нажал /add — предлагаем выбрать режим
 @router.callback_query(lambda cb: cb.data == "add")
 async def cb_add_choice(call: types.CallbackQuery, state: FSMContext):
@@ -150,7 +170,39 @@ async def handle_description(message: types.Message, state: FSMContext):
     await state.update_data(description=message.text.strip())
     await finish_add_figure(message, state)
 
+
+def format_validation_errors(detail):
+    """Преобразует detail FastAPI/Pydantic в читаемый список на русском."""
+    if not isinstance(detail, list):
+        return str(detail)
+
+    messages = []
+    for err in detail:
+        # Определяем поле (пропускаем "body")
+        field_path = [p for p in err.get("loc", []) if p != "body"]
+        field_key = ".".join(map(str, field_path)) if field_path else "?"
+
+        # Русское имя поля (если есть в словаре)
+        field_name_ru = FIELD_NAMES_RU.get(field_key, field_key)
+
+        # Сообщение
+        err_type = err.get("type", "")
+        msg_ru = ERROR_MSGS_RU.get(err_type)
+        if not msg_ru:
+            # fallback — если не нашли перевод по type
+            msg_ru = err.get("msg", "Ошибка")
+
+        # Введённое значение
+        input_val = err.get("input")
+        if input_val is not None:
+            msg_ru += f' (введено: "{input_val}")'
+
+        messages.append(f"- {field_name_ru}: {msg_ru}")
+
+    return "\n".join(messages)
+
 async def finish_add_figure(message: types.Message, state: FSMContext):
+    blank = True
     data = await state.get_data()
     payload = {
         "user_id": data["user_id"],
@@ -171,7 +223,74 @@ async def finish_add_figure(message: types.Message, state: FSMContext):
     try:
         await add_figure_to_user(**payload)
         await message.answer("Фигурка успешно добавлена в вашу коллекцию.", reply_markup=main_kb)
+
+    except HTTPStatusError as e:
+        status = e.response.status_code
+        try:
+            data = e.response.json()
+        except Exception:
+            data = {"detail": e.response.text}
+
+        if status == 422:
+            formatted = format_validation_errors(data.get("detail", []))
+            await message.answer(
+                f"Данные не прошли валидацию:\n{formatted}",
+                reply_markup=main_kb
+            )
+        elif status == 404:
+            suggestions = await fetch_similar_serials(payload["bricklink_id"], limit=3, threshold=0.1)
+            if not suggestions:
+                await message.answer("Фигурка не найдена, похожих вариантов не обнаружено.", reply_markup=main_kb)
+            else:
+                builder = InlineKeyboardBuilder()
+                for s in suggestions:
+                    bid = s.get("bricklink_id", "")
+                    name = s.get("name") or bid
+                    sim = s.get("similarity", 0) * 100
+                    btn_text = f"{name} — {bid} ({sim:.1f}%)"
+                    # callback_data: советую использовать короткий id или bricklink_id,
+                    # но следи, чтобы callback_data < 64 байт
+                    builder.button(text=btn_text, callback_data=f"suggest_choice:{bid}")
+
+                builder.button(text="Отмена", callback_data="suggest_cancel")
+                builder.adjust(1)   # 1 кнопка в строке
+                kb = builder.as_markup()
+                blank = False
+                await message.answer(
+                    "Фигурка не найдена.\nВозможно, вы имели в виду — выберите вариант:",
+                    reply_markup=kb
+                )
+        else:
+            await message.answer(f"Ошибка сервера ({status}): {data}", reply_markup=main_kb)
+
     except Exception as e:
-        await message.answer(f"Ошибка при добавлении фигурки: {e}", reply_markup=main_kb)
+        await message.answer(f"Неизвестная ошибка: {e}", reply_markup=main_kb)
+
     finally:
-        await state.clear()
+        if blank:
+            await state.clear()
+
+@router.callback_query(lambda cb: cb.data and cb.data.startswith("suggest_choice:"))
+async def cb_suggest_choice(call: types.CallbackQuery, state: FSMContext):
+    await call.answer()
+    _, new_serial = call.data.split(":", 1)
+    await state.update_data(serial=new_serial)
+    
+    # Получаем user_id из call.from_user.id и кладём в состояние
+    user_id = str(call.from_user.id)
+
+    try:
+        await call.message.edit_text(f"Попробую добавить фигурку с артикулом `{new_serial}`...", parse_mode="Markdown")
+    except Exception:
+        pass
+
+    await finish_add_figure(call.message, state)
+
+@router.callback_query(lambda cb: cb.data == "suggest_cancel")
+async def cb_suggest_cancel(call: types.CallbackQuery, state: FSMContext):
+    await call.answer()
+    try:
+        await call.message.edit_text("Операция отменена.", reply_markup=main_kb)
+    except Exception:
+        await call.message.answer("Операция отменена.", reply_markup=main_kb)
+    await state.clear()

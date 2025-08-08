@@ -92,11 +92,11 @@ async def update_figures_list(article: str):
         r.raise_for_status()
         return r.text()
 
-async def fetch_similar_serials(serial: str) -> list[str]:
+async def fetch_similar_serials(serial: str, limit: int = 5, threshold: float = 0.3) -> list[str]:
     async with httpx.AsyncClient() as client:
         r = await client.get(
             f"{COLL_BASE}/figure/similar/",
-            params={"name": serial, "limit": 5, "threshold": 0.3}
+            params={"name": serial, "limit": limit, "threshold": threshold}
         )
         if r.status_code == 200:
             return r.json()
@@ -107,12 +107,12 @@ async def clear_user_collection(user_id: str):
     """DELETE /user/{user_id}/collection - удаляет все записи коллекции"""
     async with httpx.AsyncClient() as client:
         r = await client.delete(
-            f"{COLL_BASE}/figure/users/{user_id}/collection"
+            f"{COLL_BASE}/figure/user/{user_id}/collection"
         )
         if r.status_code == 204:  # 204 No Content - обычно успешное удаление
             print("Удаление успешно.")
         elif r.status_code == 404:
-            print("Фигура не найдена.")
+            print("Коллекция не найдена.")
         else:
             print(f"Ошибка при удалении: {r.status_code} - {r.text}")
 

@@ -1,10 +1,12 @@
+# async_collage.py
 import logging
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
-import requests
 from io import BytesIO
+import httpx
+import asyncio
+import os
 
-# Настройка логирования
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
@@ -12,15 +14,16 @@ handler.setFormatter(formatter)
 logger.addHandler(handler)
 logger.setLevel(logging.DEBUG)
 
+
 class StarWarsCollageGenerator:
     @staticmethod
     def filter_by_keyword(
-        data: list,
+        data: list | pd.DataFrame,
         name_key: str,
         keyword: str
     ) -> pd.DataFrame:
         """
-        Filter list of dicts where name_key contains all words from keyword.
+        Sync: фильтрация списка/DataFrame по ключевым словам (оставил sync — дешёвая операция).
         """
         logger.info(f"Filtering {len(data)} records by keyword '{keyword}' on key '{name_key}'")
         df = pd.DataFrame(data)
@@ -50,66 +53,105 @@ class StarWarsCollageGenerator:
                 font = ImageFont.truetype(fp, font_size)
                 logger.info(f"Loaded font '{fp}'")
                 return font
-            except IOError:
-                logger.warning(f"Font path '{fp}' not found, trying next")
+            except Exception:
+                logger.debug(f"Font path '{fp}' not found or can't be loaded, trying next")
         logger.info("Falling back to default font")
         return ImageFont.load_default()
 
     @staticmethod
-    def fetch_and_prepare_images(
-        records: pd.DataFrame,
+    def _prepare_image_from_bytes(content: bytes, id_val: str, min_height: int, id_font):
+        """
+        CPU-bound sync helper to open/process image and draw text.
+        Will be run in a thread via asyncio.to_thread.
+        """
+        try:
+            img = Image.open(BytesIO(content)).convert("RGBA")
+            # preserve aspect ratio
+            new_h = min_height
+            new_w = int(new_h * (img.width / img.height)) if img.height else new_h
+            img = img.resize((new_w, new_h))
+
+            pad_top, pad_bottom = 150, 150
+            canvas = Image.new('RGB', (new_w, new_h + pad_top + pad_bottom), 'white')
+            # paste preserving alpha
+            if img.mode in ("RGBA", "LA"):
+                canvas.paste(img.convert("RGBA"), (0, pad_top), img.convert("RGBA"))
+            else:
+                canvas.paste(img, (0, pad_top))
+
+            draw = ImageDraw.Draw(canvas)
+            draw.text((10, 10), id_val, font=id_font, fill='black')
+
+            return (canvas, id_font)
+        except Exception as e:
+            logger.exception(f"Error preparing image for {id_val}: {e}")
+            return None
+
+    @classmethod
+    async def fetch_and_prepare_images_async(
+        cls,
+        records: pd.DataFrame | list,
         id_key: str,
         prefix_url: str,
         min_height: int,
         font_path: str = 'arial.ttf',
         font_size: int = 90,
-        user_agent: str = 'Mozilla/5.0'
+        user_agent: str = 'Mozilla/5.0',
+        max_connections: int = 10,
+        timeout: int = 15
     ) -> list:
         """
-        Download images, resize, add padding and draw ID text at top.
-        Returns list of tuples (image, font) where font is used for IDs.
+        Async: скачивает изображения параллельно (с ограниченной конкуренцией),
+        затем обрабатывает каждое изображение в потоке (asyncio.to_thread).
+        Возвращает list[(PIL.Image, ImageFont), ...]
         """
-        logger.info(f"Starting image fetch for {len(records)} records")
+        logger.info(f"Starting async fetch for {len(records)} records (max_conn={max_connections})")
+        # records may be DataFrame or list of dicts
+        if isinstance(records, pd.DataFrame):
+            rows = list(records.to_dict(orient='records'))
+        else:
+            rows = list(records)
+
         headers = {'User-Agent': user_agent}
-        items = []
-
-        id_font = StarWarsCollageGenerator.load_font(font_path, font_size)
         prefix = prefix_url.rstrip('/')
+        id_font = cls.load_font(font_path, font_size)
 
-        for idx, row in records.iterrows():
-            id_val = str(row[id_key])
+        results = []
+        semaphore = asyncio.Semaphore(max_connections)
+
+        async def fetch_one(row):
+            id_val = str(row.get(id_key) if isinstance(row, dict) else getattr(row, id_key, ''))
             url = f"{prefix}/{id_val}.png"
-            logger.debug(f"Fetching image {idx}: {url}")
+            logger.debug(f"Fetching {url}")
             try:
-                resp = requests.get(url, headers=headers, timeout=10)
-                resp.raise_for_status()
+                async with semaphore:
+                    async with httpx.AsyncClient(timeout=timeout) as client:
+                        r = await client.get(url, headers=headers)
+                        r.raise_for_status()
+                        content = r.content
+                # process in thread
+                prepared = await asyncio.to_thread(cls._prepare_image_from_bytes, content, id_val, min_height, id_font)
+                if prepared:
+                    logger.debug(f"Prepared image for ID {id_val}")
+                    return prepared
+                else:
+                    logger.warning(f"Processing failed for {id_val}")
+                    return None
             except Exception as e:
-                logger.error(f"Failed to fetch {url}: {e}")
-                continue
+                logger.debug(f"Failed to fetch/process {url}: {e}")
+                return None
 
-            try:
-                img = Image.open(BytesIO(resp.content))
-                new_h = min_height
-                new_w = int(new_h * (img.width / img.height))
-                img = img.resize((new_w, new_h))
-
-                pad_top, pad_bottom = 150, 150
-                canvas = Image.new('RGB', (new_w, new_h + pad_top + pad_bottom), 'white')
-                canvas.paste(img, (0, pad_top))
-
-                draw = ImageDraw.Draw(canvas)
-                draw.text((10, 10), id_val, font=id_font, fill='black')
-
-                items.append((canvas, id_font))
-                logger.debug(f"Prepared image for ID {id_val}")
-            except Exception as e:
-                logger.error(f"Error processing image {id_val}: {e}")
-
-        logger.info(f"Prepared {len(items)} images out of {len(records)} records")
-        return items
+        # create tasks
+        tasks = [asyncio.create_task(fetch_one(r)) for r in rows]
+        # gather with no fail-fast (exceptions handled inside)
+        completed = await asyncio.gather(*tasks, return_exceptions=False)
+        # filter None
+        prepared_items = [it for it in completed if it]
+        logger.info(f"Prepared {len(prepared_items)} images out of {len(rows)} records")
+        return prepared_items
 
     @staticmethod
-    def create_collage(
+    def _create_collage_impl(
         images: list,
         output_path: str,
         columns: int = 5,
@@ -119,7 +161,8 @@ class StarWarsCollageGenerator:
         font_size: int = 90
     ) -> None:
         """
-        Assemble and save a collage from a list of (image, font) tuples.
+        Sync implementation that assembles and saves collage (CPU-bound) —
+        intended to be called in a thread.
         """
         count = len(images)
         if count == 0:
@@ -131,12 +174,11 @@ class StarWarsCollageGenerator:
 
         w = max(im.width for im in imgs)
         h = max(im.height for im in imgs)
-        rows = (count + columns - 1) // columns
+        rows = (len(items) + columns - 1) // columns
 
         title_padding = 0
         if title:
             title_font = StarWarsCollageGenerator.load_font(font_path, int(font_size * 1.5))
-            # measure title
             dummy = Image.new('RGB', (1, 1))
             draw = ImageDraw.Draw(dummy)
             bbox = draw.textbbox((0, 0), title, font=title_font)
@@ -159,11 +201,33 @@ class StarWarsCollageGenerator:
             y = (idx // columns) * h + offset_y
             collage.paste(im, (x, y))
 
+        # Ensure dir exists
+        os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
         collage.save(output_path)
         logger.info(f"Collage saved to {output_path}")
 
-    @staticmethod
-    def generate_from_list(
+    @classmethod
+    async def create_collage_async(
+        cls,
+        images: list,
+        output_path: str,
+        columns: int = 5,
+        max_images: int = None,
+        title: str = None,
+        font_path: str = 'arial.ttf',
+        font_size: int = 90
+    ) -> None:
+        """
+        Async wrapper around _create_collage_impl — runs in thread to avoid blocking loop.
+        """
+        await asyncio.to_thread(
+            cls._create_collage_impl,
+            images, output_path, columns, max_images, title, font_path, font_size
+        )
+
+    @classmethod
+    async def generate_from_list_async(
+        cls,
         data: list,
         keyword: str,
         name_key: str,
@@ -175,18 +239,26 @@ class StarWarsCollageGenerator:
         font_size: int = 90,
         columns: int = 5,
         max_images: int = None,
-        title: str = None
+        title: str = None,
+        max_connections: int = 10
     ) -> None:
-        df = StarWarsCollageGenerator.filter_by_keyword(data, name_key, keyword)
-        items = StarWarsCollageGenerator.fetch_and_prepare_images(
+        """
+        High-level async helper: фильтрует, скачивает и собирает коллаж.
+        """
+        df = cls.filter_by_keyword(data, name_key, keyword)
+        items = await cls.fetch_and_prepare_images_async(
             records=df,
             id_key=id_key,
             prefix_url=prefix_url,
             min_height=min_height,
             font_path=font_path,
-            font_size=font_size
+            font_size=font_size,
+            max_connections=max_connections
         )
-        StarWarsCollageGenerator.create_collage(
+        if not items:
+            logger.warning("No images prepared, skipping collage creation")
+            return
+        await cls.create_collage_async(
             images=items,
             output_path=output_path,
             columns=columns,

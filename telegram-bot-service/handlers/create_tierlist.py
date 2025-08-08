@@ -96,17 +96,18 @@ async def on_serials_entered(message: types.Message, state: FSMContext):
 
 
 async def _generate_and_send_collage(records, user_id, title, message):
-    loop = asyncio.get_running_loop()
-    images = await loop.run_in_executor(
-        None,
-        lambda: StarWarsCollageGenerator.fetch_and_prepare_images(
-            records=StarWarsCollageGenerator.filter_by_keyword(
-                data=records, name_key='bricklink_id', keyword=''
-            ),
-            id_key='bricklink_id', prefix_url='https://img.bricklink.com/ItemImage/MN/0',
-            min_height=1050, font_path='arial.ttf', font_size=90
-        )
-    )
+    images = await StarWarsCollageGenerator.fetch_and_prepare_images_async(
+    records=StarWarsCollageGenerator.filter_by_keyword(
+        data=records, name_key='bricklink_id', keyword=''
+    ),
+    id_key='bricklink_id',
+    prefix_url='https://img.bricklink.com/ItemImage/MN/0',
+    min_height=1050,
+    font_path='arial.ttf',
+    font_size=90,
+    max_connections=10,  # подстройте при необходимости
+)
+
     if not images:
         await message.answer(
             f"Не удалось загрузить изображения для тир-листа{f' {title}' if title else ''}.", reply_markup=main_kb
@@ -115,15 +116,13 @@ async def _generate_and_send_collage(records, user_id, title, message):
 
     output_name = f"tierlist_{user_id}{f'_{title}' if title else ''}.png"
     output_path = os.path.join(TMP_DIR, output_name)
-    await loop.run_in_executor(
-        None,
-        lambda: StarWarsCollageGenerator.create_collage(
-            images=images,
-            output_path=output_path,
-            columns=5,
-            title=title
-        )
-    )
+    await StarWarsCollageGenerator.create_collage_async(
+    images=images,
+    output_path=output_path,
+    columns=5,
+    title=title
+)
+
 
     try:
         with open(output_path, 'rb') as f:

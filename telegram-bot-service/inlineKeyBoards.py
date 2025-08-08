@@ -236,3 +236,5 @@ def tierlist_kb_old() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Создать коллаж", callback_data="create_tierlist")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
     ])
+
+
