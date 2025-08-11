@@ -22,6 +22,7 @@ from handlers.info_figure import router as info_figure_router
 from handlers.cancel import router as cancel_router
 from handlers.create_tierlist import router as create_tierlist
 
+from middlewares.FallbackMiddleware import FallbackMiddleware
 
 # === Стартовый хэндлер ===
 async def cmd_start(message: Message, state: FSMContext):
@@ -70,6 +71,9 @@ async def main():
     dp.include_router(info_figure_router)
     dp.include_router(settings_router)
     dp.include_router(create_tierlist)
+
+
+    dp.update.middleware(FallbackMiddleware())
 
     # запускаем поллинг
     await dp.start_polling(bot)

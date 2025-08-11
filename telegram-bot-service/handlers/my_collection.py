@@ -174,7 +174,6 @@ async def cb_collection_excel(call: types.CallbackQuery):
     records = await list_user_figures(user_id)
     if not records:
         return await call.message.answer("Коллекция пуста.", reply_markup=main_kb)
-
     # нормализуем записи в DataFrame (если объекты с dict)
     records_list = [rec.dict() if hasattr(rec, 'dict') else rec for rec in records]
     df = pd.DataFrame(records_list)

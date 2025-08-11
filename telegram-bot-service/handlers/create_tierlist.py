@@ -113,9 +113,17 @@ async def _generate_and_send_collage(records, user_id, title, message):
             f"Не удалось загрузить изображения для тир-листа{f' {title}' if title else ''}.", reply_markup=main_kb
         )
         return
+    MAX_FILENAME_LEN = 255   
+    base_name = f"tierlist_{user_id}{f'_{title}' if title else ''}.png"
 
-    output_name = f"tierlist_{user_id}{f'_{title}' if title else ''}.png"
-    output_path = os.path.join(TMP_DIR, output_name)
+    if len(base_name) > MAX_FILENAME_LEN:
+        # Оставляем место под .png
+        max_title_len = MAX_FILENAME_LEN - len(f"tierlist_{user_id}_.png")
+        title = title[:max_title_len]
+        base_name = f"tierlist_{user_id}_{title}.png"
+
+    output_path = os.path.join(TMP_DIR, base_name)
+
     await StarWarsCollageGenerator.create_collage_async(
     images=images,
     output_path=output_path,
@@ -126,11 +134,11 @@ async def _generate_and_send_collage(records, user_id, title, message):
 
     try:
         with open(output_path, 'rb') as f:
-            doc = BufferedInputFile(f.read(), filename=output_name)
+            doc = BufferedInputFile(f.read(), filename=base_name)
         await message.answer_document(doc, caption=f"Ваш тир-лист {title or ''} готов!", reply_markup=main_kb)
-    except:
+    except Exception as e:
         await message.answer(
-            f"Ошибка отправки файла тир-листа{f' {title}' if title else ''}.", reply_markup=main_kb
+            f"Ошибка отправки файла тир-листа{f' {title}' if title else ''}. {e}", reply_markup=main_kb
         )
     finally:
         try:
