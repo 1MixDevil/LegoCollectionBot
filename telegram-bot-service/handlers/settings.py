@@ -54,3 +54,8 @@ async def cb_settings_toggle(call: types.CallbackQuery):
     await call.message.edit_reply_markup(reply_markup=kb)
     action = "включено" if new_value else "выключено"
     await call.answer(f"{RUS_LABELS[field]} {action}")
+    
+
+@router.callback_query()
+async def callback_fallback(callback: types.CallbackQuery):
+    await callback.answer("Неизвестная кнопка", show_alert=True)

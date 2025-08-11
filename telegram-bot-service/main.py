@@ -48,6 +48,7 @@ async def cmd_back_to_serial(call: types.CallbackQuery, state: FSMContext):
     )
     await call.answer()
 
+
 async def main():
     logging.basicConfig(level=logging.INFO)
     bot = Bot(token=TOKEN)
@@ -69,11 +70,8 @@ async def main():
     dp.include_router(update_figures_router)
     dp.include_router(delete_figure_router)
     dp.include_router(info_figure_router)
-    dp.include_router(settings_router)
     dp.include_router(create_tierlist)
-
-
-    dp.update.middleware(FallbackMiddleware())
+    dp.include_router(settings_router)
 
     # запускаем поллинг
     await dp.start_polling(bot)
