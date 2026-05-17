@@ -1,0 +1,7 @@
+aiogram>=3.4
+httpx
+pandas
+pillow
+openpyxl
+python-dotenv
+aiohttp

@@ -1,9 +1,0 @@
-aiogram
-pydantic-settings
-httpx
-pandas
-requests
-pillow
-temp
-Python-IO
-openpyxl
