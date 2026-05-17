@@ -1,20 +1,17 @@
 import re
-from io import BytesIO
 
-import httpx
 from aiogram import Bot, Router, types
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile
 from httpx import HTTPStatusError
 
 from app.api.collection import (
     add_figure_to_user,
     delete_figure_from_user,
     fetch_similar_serials,
-    get_figure_info,
 )
 from app.core.config import MAX_SERIALS_PER_REQUEST
-from app.keyboards.main import main_kb, make_info_kb, make_suggestions_kb, nav_kb
+from app.keyboards.main import main_kb, make_suggestions_kb, nav_kb
+from app.services.figure_display import send_figure_card
 from app.states.figures import InfoFigures
 
 router = Router()
@@ -57,30 +54,15 @@ async def cb_info_select(call: types.CallbackQuery, state: FSMContext):
 
 
 async def handle_serial(serial: str, bot: Bot, chat_id: int, telegram_id: str):
+    serial = serial.strip().lower()
     try:
-        info = await get_figure_info(telegram_id, serial)
+        in_catalog = await send_figure_card(bot, chat_id, telegram_id, serial)
     except HTTPStatusError as error:
-        if error.response.status_code == 404:
-            suggestions = await fetch_similar_serials(serial)
-            if suggestions:
-                kb = make_suggestions_kb(suggestions)
-                await bot.send_message(
-                    chat_id,
-                    "Фигурка не найдена. Возможно, вы имели в виду:",
-                    reply_markup=kb,
-                )
-            else:
-                await bot.send_message(
-                    chat_id,
-                    f"Фигурка {serial} не найдена.",
-                    reply_markup=nav_kb(),
-                )
-        else:
-            await bot.send_message(
-                chat_id,
-                f"Ошибка сервиса для {serial}: {error.response.status_code}",
-                reply_markup=nav_kb(),
-            )
+        await bot.send_message(
+            chat_id,
+            f"Ошибка сервиса для {serial}: {error.response.status_code}",
+            reply_markup=nav_kb(),
+        )
         return
     except Exception:
         await bot.send_message(
@@ -90,38 +72,15 @@ async def handle_serial(serial: str, bot: Bot, chat_id: int, telegram_id: str):
         )
         return
 
-    user_rec = info.get("user_record") or {}
-    caption = (
-        f"🔍 <b>{info['name']}</b>\n"
-        f"• Артикул: <code>{info['bricklink_id']}</code>\n"
-        f"• Цена покупки: {user_rec.get('price_buy') or '–'}\n"
-        f"• Цена продажи: {user_rec.get('price_sale') or '–'}\n"
-        f"• Описание: {user_rec.get('description') or '–'}\n"
-        f"• Дата покупки: {user_rec.get('buy_date') or '–'}\n"
-        f"• Дата продажи: {user_rec.get('sale_date') or '–'}"
-    )
-    kb = make_info_kb(serial)
-    image_url = f"https://img.bricklink.com/ItemImage/MN/0/{serial}.png"
-
-    try:
-        async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}) as client:
-            img_resp = await client.get(image_url)
-            img_resp.raise_for_status()
-            file = BufferedInputFile(img_resp.content, filename=f"{serial}.png")
-        await bot.send_photo(
-            chat_id=chat_id,
-            photo=file,
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=kb,
-        )
-    except httpx.HTTPStatusError:
-        await bot.send_message(
-            chat_id,
-            caption,
-            parse_mode="HTML",
-            reply_markup=kb,
-        )
+    if not in_catalog:
+        suggestions = await fetch_similar_serials(serial)
+        if suggestions:
+            kb = make_suggestions_kb(suggestions)
+            await bot.send_message(
+                chat_id,
+                "Похожие варианты в каталоге бота:",
+                reply_markup=kb,
+            )
 
 
 @router.callback_query(lambda cb: cb.data and cb.data.startswith("info_action:"))

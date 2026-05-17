@@ -10,7 +10,10 @@ main_kb = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="➕ Добавить",       callback_data="add"),
     ],
     [
+        InlineKeyboardButton(text="🔎 Поиск по фото",  callback_data="photo_search"),
         InlineKeyboardButton(text="📋 Желаемое",       callback_data="wishlist"),
+    ],
+    [
         InlineKeyboardButton(text="🏷 Tier‑лист",      callback_data="create_tierlist"),
     ],
     [

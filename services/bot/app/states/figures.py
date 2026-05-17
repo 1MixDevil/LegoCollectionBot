@@ -24,6 +24,10 @@ class InfoFigures(StatesGroup):
     waiting_serial = State()
 
 
+class PhotoSearchState(StatesGroup):
+    waiting_photo = State()
+
+
 class CreateTierList(StatesGroup):
     waiting_name_list = State()
     waiting_serials = State()

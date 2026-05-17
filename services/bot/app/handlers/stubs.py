@@ -20,7 +20,6 @@ STUB_CALLBACKS = frozenset({
     "bind_bricklink",
     "toggle_notifications",
     "list_tierlists",
-    "collection_tierlist",
 })
 
 

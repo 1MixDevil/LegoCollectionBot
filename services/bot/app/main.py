@@ -13,6 +13,7 @@ from app.handlers.cancel import router as cancel_router
 from app.handlers.create_tierlist import router as create_tierlist_router
 from app.handlers.delete_figure import router as delete_figure_router
 from app.handlers.info_figure import router as info_figure_router
+from app.handlers.photo_search import router as photo_search_router
 from app.handlers.my_collection import router as my_collection_router
 from app.handlers.settings import router as settings_router
 from app.handlers.stubs import router as stubs_router
@@ -71,9 +72,10 @@ async def main() -> None:
     )
 
     dp.include_router(cancel_router)
-    dp.include_router(stubs_router)
-    dp.include_router(add_figure_router)
     dp.include_router(my_collection_router)
+    dp.include_router(add_figure_router)
+    dp.include_router(photo_search_router)
+    dp.include_router(stubs_router)
     dp.include_router(update_figures_router)
     dp.include_router(delete_figure_router)
     dp.include_router(info_figure_router)
