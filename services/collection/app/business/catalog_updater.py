@@ -12,7 +12,10 @@ from typing import List, Set, Tuple
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.business.bricklink_catalog_list import fetch_minifigs_by_article
+from app.business.bricklink_catalog_list import (
+    discover_series_metadata,
+    fetch_minifigs_by_article,
+)
 from app.business.rebrickable_client import get_catalog_source
 from app.models.figures_model import CollectType, Figure
 
@@ -100,15 +103,46 @@ def insert_figures(
         return count
 
 
+async def ensure_collect_type(db: Session, article: str) -> CollectType:
+    """
+    Возвращает type_of_collect для префикса; создаёт запись, если серия есть на BrickLink.
+    """
+    article = article.strip().lower()
+    ct = db.query(CollectType).filter_by(article=article).first()
+    if ct:
+        return ct
+
+    meta = await discover_series_metadata(article)
+    if not meta:
+        raise ValueError(
+            f"Серия «{article}» не найдена на BrickLink. "
+            "Проверьте префикс (например lor, sw, hp)."
+        )
+
+    ct = CollectType(
+        article=article,
+        name=str(meta["name"]),
+        pad_len=int(meta["pad_len"]),
+    )
+    db.add(ct)
+    db.commit()
+    db.refresh(ct)
+    logger.info(
+        "Создан type_of_collect: article=%s name=%s pad_len=%s",
+        article,
+        ct.name,
+        ct.pad_len,
+    )
+    return ct
+
+
 async def sync_from_bricklink_catalog(db: Session, article: str) -> dict:
     """
     Массовое наполнение каталога из BrickLink catalogList (без cookies).
     Rebrickable не использует артикулы BrickLink (sw0001a) — только fig-XXXXX.
     """
     article = article.strip().lower()
-    ct = db.query(CollectType).filter_by(article=article).first()
-    if not ct:
-        raise ValueError(f"Серия '{article}' не найдена в type_of_collect")
+    ct = await ensure_collect_type(db, article)
 
     existing_count = (
         db.query(Figure).filter(Figure.type_collected_id == ct.id).count()

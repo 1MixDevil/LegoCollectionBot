@@ -36,9 +36,24 @@ _tree_cache: Optional[str] = None
 # Проверенные catString (Minifigures → Licensed → …), чтобы не дергать дерево лишний раз
 CAT_STRING_OVERRIDES: dict[str, str] = {
     "sw": "65",
+    "lor": "789",
+    "hp": "67",
+}
+
+# Подсказки для поиска категории в дереве BrickLink (article → фразы в названии)
+ARTICLE_KEYWORD_HINTS: dict[str, list[str]] = {
+    "lor": ["lord of the rings", "hobbit", "lotr"],
+    "hp": ["harry potter"],
+    "njo": ["ninjago"],
+    "jw": ["jurassic"],
+    "mar": ["super mario"],
+    "sh": ["super heroes", "dc comics", "marvel"],
+    "dp": ["disney"],
+    "dim": ["dimensions"],
 }
 
 MAX_CATALOG_PAGES = int(os.getenv("BRICKLINK_CATALOG_MAX_PAGES", "80"))
+MAX_CAT_SCAN = int(os.getenv("BRICKLINK_CAT_SCAN_LIMIT", "80"))
 
 
 def _normalize_name(raw: str) -> str:
@@ -76,6 +91,34 @@ def _extract_cat_string(href: str) -> Optional[str]:
     if not cat:
         return None
     return cat[0]
+
+
+def _all_categories_from_tree(tree_html: str) -> list[tuple[str, str]]:
+    """Уникальные пары (catString, название категории)."""
+    doc = html.fromstring(tree_html)
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for node in doc.xpath("//a[contains(@href,'catalogList.asp')]"):
+        href = node.get("href") or ""
+        cat = _extract_cat_string(href)
+        if not cat or cat in seen:
+            continue
+        label = " ".join(node.itertext()).strip()
+        if not label or label == "{}":
+            continue
+        seen.add(cat)
+        out.append((cat, label))
+    return out
+
+
+def infer_pad_len(item_ids: list[str], article: str) -> int:
+    article = article.lower()
+    lengths: list[int] = []
+    for item_id in item_ids:
+        m = re.match(rf"{re.escape(article)}(\d+)([a-z]?)$", item_id.lower())
+        if m:
+            lengths.append(len(m.group(1)))
+    return max(lengths) if lengths else 3
 
 
 def _cat_candidates_from_tree(tree_html: str, theme_name: str) -> list[str]:
@@ -139,11 +182,73 @@ async def _fetch_text(
     raise RuntimeError("BrickLink: превышен лимит запросов (429)")
 
 
+async def _resolve_cat_by_prefix_scan(
+    session: aiohttp.ClientSession,
+    article: str,
+) -> tuple[Optional[str], Optional[str], int]:
+    """
+    Ищет категорию BrickLink, где на первой странице есть артикулы с префиксом article.
+    Возвращает (catString, label, count_on_page).
+    """
+    global _tree_cache
+    if _tree_cache is None:
+        _tree_cache = await _fetch_text(session, CATALOG_TREE_URL, {})
+
+    article = article.lower()
+    hints = ARTICLE_KEYWORD_HINTS.get(article, [])
+    all_cats = _all_categories_from_tree(_tree_cache)
+
+    if hints:
+        filtered = [
+            (cat, label)
+            for cat, label in all_cats
+            if any(h in label.lower() for h in hints)
+        ]
+    else:
+        filtered = all_cats
+
+    filtered = sorted(
+        filtered,
+        key=lambda pair: (pair[0].count("."), len(pair[0])),
+    )
+
+    best_cat: Optional[str] = None
+    best_label: Optional[str] = None
+    best_count = 0
+    checks = 0
+
+    for cat, label in filtered:
+        if checks >= MAX_CAT_SCAN:
+            break
+        checks += 1
+        sample = await _fetch_text(
+            session,
+            CATALOG_LIST_URL,
+            {
+                "catType": "M",
+                "catString": cat,
+                "pageSize": 30,
+                "pg": 1,
+            },
+        )
+        items = parse_catalog_list_page(sample, article)
+        count = len(items)
+        if count > best_count:
+            best_count = count
+            best_cat = cat
+            best_label = label
+        if best_count >= 10:
+            break
+
+    return best_cat, best_label, best_count
+
+
 async def resolve_cat_string(
     session: aiohttp.ClientSession,
     article: str,
-    theme_name: str,
+    theme_name: Optional[str] = None,
 ) -> Optional[str]:
+    article = article.lower()
     if article in _cat_cache:
         return _cat_cache[article]
 
@@ -156,63 +261,107 @@ async def resolve_cat_string(
     global _tree_cache
     if _tree_cache is None:
         _tree_cache = await _fetch_text(session, CATALOG_TREE_URL, {})
-    candidates = _cat_candidates_from_tree(_tree_cache, theme_name)
+
     best_cat: Optional[str] = None
     best_count = 0
 
-    for cat in candidates[:4]:
-        sample = await _fetch_text(
+    if theme_name and theme_name.strip():
+        candidates = _cat_candidates_from_tree(_tree_cache, theme_name)
+        for cat in candidates[:6]:
+            sample = await _fetch_text(
+                session,
+                CATALOG_LIST_URL,
+                {
+                    "catType": "M",
+                    "catString": cat,
+                    "pageSize": 30,
+                    "pg": 1,
+                },
+            )
+            items = parse_catalog_list_page(sample, article)
+            if len(items) > best_count:
+                best_count = len(items)
+                best_cat = cat
+            if best_count >= 5:
+                break
+
+    if not best_cat or best_count < 3:
+        scan_cat, _scan_label, scan_count = await _resolve_cat_by_prefix_scan(
+            session, article
+        )
+        if scan_cat and scan_count > best_count:
+            best_cat = scan_cat
+            best_count = scan_count
+
+    if best_cat:
+        _cat_cache[article] = best_cat
+        logger.info(
+            "[%s] BrickLink catString=%s (совпадений на 1-й стр.: %s)",
+            article,
+            best_cat,
+            best_count,
+        )
+        return best_cat
+
+    logger.warning("[%s] Категория BrickLink не найдена", article)
+    return None
+
+
+async def discover_series_metadata(article: str) -> Optional[dict[str, object]]:
+    """
+    Метаданные серии для type_of_collect, если записи ещё нет в БД.
+    """
+    article = article.strip().lower()
+    async with aiohttp.ClientSession() as session:
+        cat = await resolve_cat_string(session, article, theme_name=None)
+        if not cat:
+            return None
+
+        sample_html = await _fetch_text(
             session,
             CATALOG_LIST_URL,
             {
                 "catType": "M",
                 "catString": cat,
-                "pageSize": 30,
+                "pageSize": 50,
                 "pg": 1,
             },
         )
-        items = parse_catalog_list_page(sample, article)
-        if len(items) > best_count:
-            best_count = len(items)
-            best_cat = cat
-        if best_count >= 5:
-            break
+        items = parse_catalog_list_page(sample_html, article)
+        if not items:
+            return None
 
-    if best_cat:
-        _cat_cache[article] = best_cat
-        logger.info(
-            "[%s] BrickLink catString=%s (тема «%s»), на 1-й стр.: %s шт.",
-            article,
-            best_cat,
-            theme_name,
-            best_count,
-        )
-        return best_cat
+        label = article.upper()
+        if _tree_cache:
+            for _cat, lbl in _all_categories_from_tree(_tree_cache):
+                if _cat == cat:
+                    label = lbl
+                    break
 
-    logger.warning(
-        "[%s] Не найдена категория BrickLink для «%s» (кандидатов: %s)",
-        article,
-        theme_name,
-        len(candidates),
-    )
-    return None
+        ids = [item_id for item_id, _ in items]
+        return {
+            "name": label,
+            "pad_len": infer_pad_len(ids, article),
+            "cat_string": cat,
+            "sample_count": len(items),
+        }
 
 
 async def fetch_minifigs_by_article(
     article: str,
-    theme_name: str,
+    theme_name: Optional[str] = None,
     *,
     page_size: int = 50,
     delay_sec: float = 0.5,
 ) -> list[tuple[str, str]]:
     """
-    Все минифигурки серии по префиксу BrickLink (sw, hp, …) из catalogList.
+    Все минифигурки серии по префиксу BrickLink (sw, hp, lor, …) из catalogList.
     """
     article = article.strip().lower()
     collected: dict[str, str] = {}
 
     async with aiohttp.ClientSession() as session:
-        cat = await resolve_cat_string(session, article, theme_name)
+        cat = await resolve_cat_string(session, article, theme_name or None)
         if not cat:
             return []
 

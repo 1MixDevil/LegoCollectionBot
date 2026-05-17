@@ -1,5 +1,6 @@
 import logging
 
+import httpx
 from aiogram import Router, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -101,6 +102,19 @@ async def get_article(message: types.Message, state: FSMContext):
         logger.info("Ответ update: %s", result)
         text = format_update_result(article, result)
         await status_msg.edit_text(text, parse_mode="HTML", reply_markup=main_kb)
+    except httpx.HTTPStatusError as e:
+        detail = str(e)
+        try:
+            body = e.response.json()
+            if isinstance(body.get("detail"), str):
+                detail = body["detail"]
+        except Exception:
+            pass
+        await status_msg.edit_text(
+            f"❌ {detail}",
+            parse_mode="HTML",
+            reply_markup=main_kb,
+        )
     except Exception as e:
         logger.exception("Ошибка update")
         await status_msg.edit_text(

@@ -174,7 +174,10 @@ async def update_figures(
     max_miss: int = 20,
     db: Session = Depends(get_db),
 ):
-    return await update_catalog(db, article, max_miss)
+    try:
+        return await update_catalog(db, article, max_miss)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @router.put("/update_figures_all/", status_code=status.HTTP_200_OK)
 async def update_all_figures(
