@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from datetime import datetime
 from typing import Any, Optional
 
 import httpx
@@ -9,8 +11,10 @@ from aiogram import Bot
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 from httpx import HTTPStatusError
 
-from app.api.collection import get_figure_info, list_user_figures
+from app.api.collection import get_figure_info, get_figure_market, list_user_figures
 from app.keyboards.main import make_info_kb
+
+logger = logging.getLogger(__name__)
 
 
 def bricklink_catalog_url(bricklink_id: str) -> str:
@@ -20,16 +24,54 @@ def bricklink_catalog_url(bricklink_id: str) -> str:
     )
 
 
-def _format_money(value) -> str:
+def bricklink_price_guide_url(bricklink_id: str) -> str:
+    return f"https://www.bricklink.com/catalogPG.asp?M={bricklink_id.lower()}"
+
+
+def _format_money(value, currency: str = "") -> str:
     if value is None:
         return "–"
     try:
         num = float(value)
+        if currency == "RUB":
+            suffix = " ₽"
+        elif currency:
+            suffix = f" {currency}"
+        else:
+            suffix = ""
         if num == int(num):
-            return f"{int(num)}"
-        return f"{num:.2f}"
+            return f"{int(num)}{suffix}"
+        return f"{num:.2f}{suffix}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _format_price_dual(
+    amount,
+    currency: str,
+    source_currency: str | None,
+    exchange_rate: float | None,
+) -> str:
+    main = _format_money(amount, currency)
+    if (
+        not source_currency
+        or not exchange_rate
+        or amount is None
+        or currency == source_currency
+    ):
+        return main
+    try:
+        original = float(amount) / float(exchange_rate)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return main
+    return f"{main} ({_format_money(original, source_currency)})"
+
+
+def _format_rate_date(iso_date: str) -> str:
+    try:
+        return datetime.strptime(iso_date[:10], "%Y-%m-%d").strftime("%d.%m.%Y")
+    except ValueError:
+        return iso_date[:10]
 
 
 async def get_user_figure_stats(
@@ -61,6 +103,58 @@ async def get_user_figure_stats(
     }
 
 
+def _format_market_lines(market: dict | None, bricklink_id: str = "") -> list[str]:
+    bid = (market or {}).get("bricklink_id") or bricklink_id
+    if not market or market.get("error"):
+        return [
+            "• 📊 BrickLink: цены временно недоступны",
+            f'• <a href="{bricklink_price_guide_url(bid)}">Price Guide на BrickLink</a>',
+        ]
+
+    cur = market.get("currency") or "USD"
+    src_cur = market.get("source_currency")
+    rate = market.get("exchange_rate")
+    lines = ["", "📊 <b>BrickLink</b> (средние за 6 мес.)"]
+    if src_cur and rate and cur == "RUB":
+        rate_date = market.get("exchange_rate_date") or ""
+        date_str = _format_rate_date(rate_date) if rate_date else ""
+        date_part = f" на {date_str}" if date_str else ""
+        lines.append(f"• Курс ЦБ{date_part}: 1 {src_cur} = {rate:.2f} ₽")
+    pg_url = market.get("price_guide_url") or bricklink_price_guide_url(
+        market.get("bricklink_id", "")
+    )
+
+    for label, sale_label, key in (
+        ("🆕 Новая", "нов.", "new"),
+        ("♻️ Б/У", "б/у", "used"),
+    ):
+        c = market.get(key) or {}
+        avg6 = c.get("avg_price_6m")
+        sold = c.get("times_sold_6m")
+        if avg6 is not None:
+            price_str = _format_price_dual(avg6, cur, src_cur, rate)
+            part = f"{label}: <b>{price_str}</b>"
+            if sold is not None:
+                part += f" · продаж {sold}"
+            lines.append(f"• {part}")
+        lots = c.get("total_lots")
+        qty = c.get("total_qty_for_sale")
+        avg_l = c.get("avg_price_listed")
+        if lots is not None and qty is not None:
+            extra = (
+                f" · ср. {_format_price_dual(avg_l, cur, src_cur, rate)}"
+                if avg_l
+                else ""
+            )
+            lines.append(
+                f"• 🛒 В продаже ({sale_label}): <b>{lots}</b> лотов / "
+                f"<b>{qty}</b> шт.{extra}"
+            )
+
+    lines.append(f'• <a href="{pg_url}">Подробный Price Guide</a>')
+    return lines
+
+
 def build_caption(
     *,
     name: str,
@@ -71,21 +165,20 @@ def build_caption(
     catalog_name: str | None = None,
     user_record: dict | None = None,
     collection_stats: dict | None = None,
+    market: dict | None = None,
 ) -> str:
     lines: list[str] = []
 
     if recognition_score is not None:
         lines.append(f"🔎 <b>Распознано</b> ({recognition_score * 100:.0f}%)")
+        lines.append(f"<b>{name}</b>")
     else:
         lines.append(f"🔍 <b>{name}</b>")
-
-    if recognition_score is not None:
-        lines.append(f"<b>{name}</b>")
 
     lines.append(f"• Артикул: <code>{bricklink_id}</code>")
 
     url = bricklink_url or bricklink_catalog_url(bricklink_id)
-    lines.append(f'• <a href="{url}">Открыть на BrickLink</a>')
+    lines.append(f'• <a href="{url}">Каталог BrickLink</a>')
 
     if in_catalog:
         display_name = catalog_name or name
@@ -96,38 +189,45 @@ def build_caption(
             "• ⚠️ Нет в каталоге — «🔄 Обновить каталог» (админ) или «❓ Помощь»"
         )
 
+    lines.extend(_format_market_lines(market, bricklink_id))
+
     stats = collection_stats or {}
     count = stats.get("count", 0)
     for_sale = stats.get("for_sale", 0)
 
+    lines.append("")
+    lines.append("<b>Ваша коллекция</b>")
     if count > 0:
-        lines.append(f"• 📦 В вашей коллекции: <b>{count}</b> шт.")
+        lines.append(f"• 📦 В коллекции: <b>{count}</b> шт.")
     else:
-        lines.append("• 📦 В вашей коллекции: нет")
+        lines.append("• 📦 В коллекции: нет")
 
     if for_sale > 0:
         prices = stats.get("sale_prices") or []
         if prices:
             price_str = ", ".join(_format_money(p) for p in sorted(prices))
             lines.append(
-                f"• 💰 На продажу: <b>{for_sale}</b> шт. (цены: {price_str})"
+                f"• 💰 Ваши объявления: <b>{for_sale}</b> шт. (цены: {price_str})"
             )
         else:
-            lines.append(f"• 💰 На продажу: <b>{for_sale}</b> шт.")
+            lines.append(f"• 💰 Ваши объявления: <b>{for_sale}</b> шт.")
     else:
-        lines.append("• 💰 На продажу: нет")
+        lines.append("• 💰 Ваши объявления: нет")
 
     if user_record:
         lines.append(
-            f"• Цена покупки (последняя): "
-            f"{_format_money(user_record.get('price_buy'))}"
+            f"• Цена покупки (запись): {_format_money(user_record.get('price_buy'))}"
         )
-        lines.append(
-            f"• Описание: {user_record.get('description') or '–'}"
-        )
-        lines.append(
-            f"• Дата покупки: {user_record.get('buy_date') or '–'}"
-        )
+        if user_record.get("price_sale") is not None:
+            lines.append(
+                f"• Цена продажи (запись): {_format_money(user_record.get('price_sale'))}"
+            )
+        desc = (user_record.get("description") or "").strip()
+        if desc:
+            short = desc[:120] + ("…" if len(desc) > 120 else "")
+            lines.append(f"• Заметка: {short}")
+        if user_record.get("buy_date"):
+            lines.append(f"• Дата покупки: {user_record.get('buy_date')}")
 
     return "\n".join(lines)
 
@@ -148,6 +248,7 @@ async def send_figure_card(
     in_catalog = True
     catalog_name: str | None = name
     user_record: dict | None = None
+    market: dict | None = None
 
     try:
         info = await get_figure_info(telegram_id, bricklink_id)
@@ -160,6 +261,12 @@ async def send_figure_card(
         else:
             raise
 
+    try:
+        market = await get_figure_market(bricklink_id)
+    except Exception:
+        logger.exception("market prices for %s", bricklink_id)
+        market = {"bricklink_id": bricklink_id, "error": "fetch_failed"}
+
     stats = await get_user_figure_stats(telegram_id, bricklink_id)
     caption = build_caption(
         name=catalog_name or bricklink_id,
@@ -170,6 +277,7 @@ async def send_figure_card(
         catalog_name=catalog_name,
         user_record=user_record,
         collection_stats=stats,
+        market=market,
     )
     kb = reply_markup or make_info_kb(bricklink_id)
     image_url = f"https://img.bricklink.com/ItemImage/MN/0/{bricklink_id}.png"
@@ -190,6 +298,7 @@ async def send_figure_card(
             reply_markup=kb,
         )
     except Exception:
+        logger.info("send photo fallback for %s", bricklink_id)
         await bot.send_message(
             chat_id=chat_id,
             text=caption,

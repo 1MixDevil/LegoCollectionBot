@@ -55,6 +55,7 @@ services:
       COLLECTION_PORT: "8001"
       CATALOG_DATA_SOURCE: ${CATALOG_DATA_SOURCE:-rebrickable}
       REBRICKABLE_REQUEST_INTERVAL: ${REBRICKABLE_REQUEST_INTERVAL:-1.05}
+      DISPLAY_CURRENCY: ${DISPLAY_CURRENCY:-RUB}
     depends_on:
       db:
         condition: service_healthy

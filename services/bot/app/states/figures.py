@@ -43,6 +43,5 @@ class HelpState(StatesGroup):
 
 
 class CollectionState(StatesGroup):
-    waiting_search = State()
-    waiting_remove = State()
-    waiting_info_serial = State()
+    browsing = State()
+    waiting_list_query = State()

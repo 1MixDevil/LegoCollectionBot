@@ -19,6 +19,7 @@ FEATURES: dict[str, frozenset[str]] = {
     "my_collection": frozenset({ROLE_ADMIN, ROLE_MEMBER, ROLE_PREMIUM}),
     "add": frozenset({ROLE_ADMIN, ROLE_MEMBER, ROLE_PREMIUM}),
     "photo_search": frozenset({ROLE_ADMIN, ROLE_MEMBER, ROLE_PREMIUM}),
+    "figure_card": frozenset({ROLE_ADMIN, ROLE_MEMBER, ROLE_PREMIUM}),
     "wishlist": frozenset({ROLE_ADMIN, ROLE_MEMBER, ROLE_PREMIUM}),
     "settings": frozenset({ROLE_ADMIN, ROLE_MEMBER, ROLE_PREMIUM}),
     "help": frozenset({ROLE_ADMIN, ROLE_MEMBER, ROLE_PREMIUM}),

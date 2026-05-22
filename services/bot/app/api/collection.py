@@ -83,6 +83,16 @@ async def clear_user_collection(telegram_id: str) -> None:
         response.raise_for_status()
 
 
+async def get_figure_market(bricklink_id: str) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        response = await client.get(
+            f"{COLLECTION_BASE_URL}/figure/market/",
+            params={"bricklink_id": bricklink_id},
+        )
+        response.raise_for_status()
+        return response.json()
+
+
 async def get_figure_info(telegram_id: str, bricklink_id: str) -> dict[str, Any]:
     user_id = await resolve_user_id(telegram_id)
     async with httpx.AsyncClient() as client:

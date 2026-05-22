@@ -1,6 +1,6 @@
 import re
 
-from aiogram import Bot, Router, types
+from aiogram import Bot, F, Router, types
 from aiogram.fsm.context import FSMContext
 from httpx import HTTPStatusError
 
@@ -9,54 +9,91 @@ from app.api.collection import (
     delete_figure_from_user,
     fetch_similar_serials,
 )
+from app.core.access import ensure_access, get_main_keyboard
 from app.core.config import MAX_SERIALS_PER_REQUEST
-from app.keyboards.main import main_kb, make_suggestions_kb, nav_kb
+from app.keyboards.main import make_suggestions_kb, nav_kb, prompt_kb
 from app.services.figure_display import send_figure_card
 from app.states.figures import InfoFigures
 
 router = Router()
 
+FIGURE_CARD_PROMPT = (
+    "ℹ️ <b>Карточка фигурки</b>\n\n"
+    "Введите артикул BrickLink (например <code>sw0001a</code>) — "
+    "фото, цены BrickLink и ваши записи в коллекции.\n\n"
+    "<i>Это не поиск по фото и не поиск внутри «Моя коллекция».</i>"
+)
 
-@router.callback_query(lambda cb: cb.data == "info")
-async def cb_info(call: types.CallbackQuery, state: FSMContext):
-    await call.message.answer(
-        "Введите серийные номера фигурок через запятую (,) или точку с запятой (;), или один номер:",
-        reply_markup=nav_kb(),
-    )
+
+async def _start_figure_card(message: types.Message, state: FSMContext) -> None:
     await state.set_state(InfoFigures.waiting_serial)
+    await message.answer(
+        FIGURE_CARD_PROMPT,
+        parse_mode="HTML",
+        reply_markup=prompt_kb(),
+    )
+
+
+@router.callback_query(F.data == "figure_card")
+async def cb_figure_card(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "figure_card"):
+        return
     await call.answer()
+    await state.clear()
+    await _start_figure_card(call.message, state)
+
+
+@router.callback_query(F.data == "info")
+async def cb_info_legacy(call: types.CallbackQuery, state: FSMContext) -> None:
+    """Старый callback — то же, что «Карточка фигурки»."""
+    await cb_figure_card(call, state)
 
 
 @router.message(InfoFigures.waiting_serial)
-async def get_info_figure(message: types.Message, state: FSMContext):
+async def get_info_figure(message: types.Message, state: FSMContext) -> None:
     text = message.text.strip()
     telegram_id = str(message.from_user.id)
     serials = [s.strip() for s in re.split(r"[,; ]", text) if s.strip()]
 
     if len(serials) > MAX_SERIALS_PER_REQUEST:
         await message.answer(
-            f"❗️ Вы можете запрашивать не более {MAX_SERIALS_PER_REQUEST} артикула за раз.",
+            f"❗️ Не более {MAX_SERIALS_PER_REQUEST} артикулов за раз.",
             reply_markup=nav_kb(),
         )
         return
 
+    await state.clear()
+    main_kb = await get_main_keyboard(telegram_id)
     for serial in serials:
-        await handle_serial(serial, message.bot, message.chat.id, telegram_id)
+        await handle_serial(serial, message.bot, message.chat.id, telegram_id, main_kb)
 
 
 @router.callback_query(lambda cb: cb.data and cb.data.startswith("select_similar:"))
-async def cb_info_select(call: types.CallbackQuery, state: FSMContext):
+async def cb_info_select(call: types.CallbackQuery, state: FSMContext) -> None:
     await call.answer()
     _, serial = call.data.split(":", 1)
     await call.message.delete()
     telegram_id = str(call.from_user.id)
-    await handle_serial(serial, call.bot, call.message.chat.id, telegram_id)
+    main_kb = await get_main_keyboard(telegram_id)
+    await handle_serial(serial, call.bot, call.message.chat.id, telegram_id, main_kb)
 
 
-async def handle_serial(serial: str, bot: Bot, chat_id: int, telegram_id: str):
+async def handle_serial(
+    serial: str,
+    bot: Bot,
+    chat_id: int,
+    telegram_id: str,
+    reply_markup=None,
+):
     serial = serial.strip().lower()
     try:
-        in_catalog = await send_figure_card(bot, chat_id, telegram_id, serial)
+        in_catalog = await send_figure_card(
+            bot,
+            chat_id,
+            telegram_id,
+            serial,
+            reply_markup=reply_markup,
+        )
     except HTTPStatusError as error:
         await bot.send_message(
             chat_id,

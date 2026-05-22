@@ -68,8 +68,7 @@ async def on_admin_telegram_id(message: types.Message, state: FSMContext):
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             await message.answer(
-                "Пользователь не найден. Пусть откроет бота и нажмёт Start "
-                "(или отправит /start в Telegram)."
+                "Пользователь не найден. Пусть откроет бота и отправит /start."
             )
             return
         await message.answer("Ошибка сервиса авторизации.")

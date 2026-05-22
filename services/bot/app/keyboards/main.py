@@ -24,15 +24,17 @@ def build_main_kb(role: str) -> InlineKeyboardMarkup:
         rows.append(row1)
 
     row2 = _row(
+        InlineKeyboardButton(text="ℹ️ Карточка фигурки", callback_data="figure_card")
+        if can_access(role, "figure_card")
+        else None,
         InlineKeyboardButton(text="🔎 Поиск по фото", callback_data="photo_search")
         if can_access(role, "photo_search")
-        else None,
-        InlineKeyboardButton(text="📋 Желаемое", callback_data="wishlist")
-        if can_access(role, "wishlist")
         else None,
     )
     if row2:
         rows.append(row2)
+
+    # «Желаемое» скрыто до реализации функции
 
     if can_access(role, "tierlist"):
         rows.append(

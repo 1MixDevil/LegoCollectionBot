@@ -7,6 +7,8 @@ from collections import Counter
 from decimal import Decimal
 from typing import Any
 
+PICK_PAGE_SIZE = 8
+
 
 def _as_records(records: list[Any]) -> list[dict]:
     out: list[dict] = []
@@ -113,36 +115,56 @@ def filter_collection_records(records: list[Any], query: str) -> list[dict]:
     return out
 
 
-def format_collection_page(
-    records: list[dict],
-    page: int,
+def unique_figure_entries(records: list[Any]) -> list[dict]:
+    """Одна строка на артикул + счётчик записей в коллекции."""
+    rows = _as_records(records)
+    by_id: dict[str, dict] = {}
+    for r in rows:
+        bid = (r.get("bricklink_id") or "").lower()
+        if not bid:
+            continue
+        if bid not in by_id:
+            by_id[bid] = {**r, "bricklink_id": bid, "count": 1}
+        else:
+            by_id[bid]["count"] = by_id[bid].get("count", 1) + 1
+    return sorted(by_id.values(), key=lambda x: x["bricklink_id"])
+
+
+def filter_unique_figures(records: list[Any], query: str) -> list[dict]:
+    filtered = filter_collection_records(records, query)
+    return unique_figure_entries(filtered)
+
+
+def format_browse_header(
     *,
-    page_size: int = 12,
-    title: str = "📋 Список",
-) -> tuple[str, int]:
-    """Текст страницы и число страниц."""
-    total = len(records)
+    query: str | None,
+    total: int,
+    page: int,
+    pages: int,
+) -> str:
+    if query:
+        title = f"🔍 <b>Поиск:</b> {query}"
+    else:
+        title = "📋 <b>Список фигурок</b>"
     if total == 0:
-        return f"{title}\n\nНичего не найдено.", 0
+        return f"{title}\n\nНичего не найдено."
+    return (
+        f"{title}\n"
+        f"Найдено: <b>{total}</b> · стр. <b>{page + 1}/{pages}</b>\n\n"
+        "Нажмите кнопку или введите артикул в чат.\n"
+        "<i>Удаление — на карточке фигурки.</i>"
+    )
 
-    pages = max(1, (total + page_size - 1) // page_size)
-    page = max(0, min(page, pages - 1))
-    start = page * page_size
-    chunk = records[start : start + page_size]
 
-    lines = [
-        f"{title} · стр. {page + 1}/{pages} · всего {total}",
-        "",
-    ]
-    for r in chunk:
-        bid = r.get("bricklink_id", "?")
-        name = (r.get("name") or "—")[:40]
-        extra: list[str] = []
-        if r.get("price_buy") is not None:
-            extra.append(f"куп. {r['price_buy']}")
-        if r.get("price_sale") is not None:
-            extra.append(f"прод. {r['price_sale']}")
-        suffix = f" ({', '.join(extra)})" if extra else ""
-        lines.append(f"• <code>{bid}</code> — {name}{suffix}")
-
-    return "\n".join(lines), pages
+def figure_button_label(entry: dict) -> str:
+    bid = entry.get("bricklink_id", "?")
+    name = (entry.get("name") or "").strip()
+    count = int(entry.get("count") or 1)
+    if name:
+        short = name if len(name) <= 22 else name[:21] + "…"
+        label = f"{bid} · {short}"
+    else:
+        label = bid
+    if count > 1:
+        label += f" ×{count}"
+    return label[:60]

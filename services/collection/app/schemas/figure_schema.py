@@ -113,6 +113,30 @@ class SimilarFigure(BaseModel):
         orm_mode = True
 
 
+class MarketConditionPrices(BaseModel):
+    avg_price_6m: Optional[float] = None
+    min_price_6m: Optional[float] = None
+    max_price_6m: Optional[float] = None
+    times_sold_6m: Optional[int] = None
+    total_qty_sold_6m: Optional[int] = None
+    total_lots: Optional[int] = None
+    total_qty_for_sale: Optional[int] = None
+    avg_price_listed: Optional[float] = None
+
+
+class FigureMarketPrices(BaseModel):
+    bricklink_id: str
+    currency: str = "USD"
+    source_currency: Optional[str] = None
+    exchange_rate: Optional[float] = None
+    exchange_rate_date: Optional[str] = None
+    exchange_rate_source: Optional[str] = None
+    error: Optional[str] = None
+    new: MarketConditionPrices = MarketConditionPrices()
+    used: MarketConditionPrices = MarketConditionPrices()
+    price_guide_url: Optional[str] = None
+
+
 class FigureBrief(BaseModel):
     """Краткая карточка фигурки для поиска / тир-листа."""
 

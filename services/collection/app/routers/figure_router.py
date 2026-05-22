@@ -28,7 +28,10 @@ from app.crud.figure_crud import (
 from app.models.figures_model import FigureToUser
 
 from app.business.catalog_updater import update_catalog
+from app.business.bricklink_price_guide import get_market_prices, price_guide_to_dict
+from app.business.exchange_rates import apply_display_currency
 from app.business.parser import FastFigureUpdater
+from app.schemas.figure_schema import FigureMarketPrices, MarketConditionPrices
 
 router = APIRouter(prefix="/figure", tags=["figure"])
 
@@ -221,6 +224,43 @@ async def update_all_figures(
             total_added += res.get("added", 0)
 
     return {"added_per_article": summary, "total_added": total_added}
+
+
+@router.get(
+    "/market/",
+    response_model=FigureMarketPrices,
+    status_code=status.HTTP_200_OK,
+    summary="Цены BrickLink (6 мес. и в продаже)",
+)
+async def get_figure_market(
+    bricklink_id: str = Query(..., description="BrickLink ID, например sw0001a"),
+):
+    data = await get_market_prices(bricklink_id.strip().lower())
+    raw = price_guide_to_dict(data)
+
+    def to_cond(key: str) -> MarketConditionPrices:
+        c = raw.get(key) or {}
+        return MarketConditionPrices(
+            avg_price_6m=c.get("avg_price_6m"),
+            min_price_6m=c.get("min_price_6m"),
+            max_price_6m=c.get("max_price_6m"),
+            times_sold_6m=c.get("times_sold_6m"),
+            total_qty_sold_6m=c.get("total_qty_sold_6m"),
+            total_lots=c.get("total_lots"),
+            total_qty_for_sale=c.get("total_qty_for_sale"),
+            avg_price_listed=c.get("avg_price_listed"),
+        )
+
+    bid = raw.get("bricklink_id") or bricklink_id.lower()
+    market = FigureMarketPrices(
+        bricklink_id=bid,
+        currency=raw.get("currency") or "USD",
+        error=raw.get("error"),
+        new=to_cond("new"),
+        used=to_cond("used"),
+        price_guide_url=f"https://www.bricklink.com/catalogPG.asp?M={bid}",
+    )
+    return await apply_display_currency(market)
 
 
 @router.get(
