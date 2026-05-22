@@ -103,7 +103,7 @@ async def cb_info_actions(call: types.CallbackQuery):
         except HTTPStatusError as e:
             if e.response.status_code == 404:
                 await call.answer(
-                    "Фигурка не найдена в каталоге. Сначала /update.",
+                    "Фигурка не найдена в каталоге. «🔄 Обновить каталог» или «❓ Помощь».",
                     show_alert=True,
                 )
             else:

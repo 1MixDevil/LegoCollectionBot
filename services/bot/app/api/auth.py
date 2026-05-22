@@ -39,6 +39,23 @@ async def create_user(telegram_id: str, username: str) -> Optional[dict[str, Any
             raise
 
 
+async def list_users() -> list[dict[str, Any]]:
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{AUTH_BASE_URL}/users/")
+        response.raise_for_status()
+        return response.json()
+
+
+async def set_user_role(user_id: int, role: str) -> dict[str, Any]:
+    async with httpx.AsyncClient() as client:
+        response = await client.patch(
+            f"{AUTH_BASE_URL}/users/{user_id}/role",
+            json={"role": role},
+        )
+        response.raise_for_status()
+        return response.json()
+
+
 async def update_user_settings(user_id: int, **fields: bool) -> dict[str, Any]:
     payload = {"user_id": user_id, **fields}
     async with httpx.AsyncClient() as client:

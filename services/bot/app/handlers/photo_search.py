@@ -11,7 +11,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.keyboards.main import main_kb, prompt_kb
+from app.core.access import ensure_access, get_main_keyboard
+from app.keyboards.main import prompt_kb
 from app.services.brickognize import format_top_candidates, search_by_image_bytes
 from app.services.figure_display import send_figure_card
 from app.states.figures import PhotoSearchState
@@ -57,6 +58,8 @@ async def _download_telegram_image(message: types.Message) -> tuple[bytes, str]:
 
 @router.callback_query(F.data == "photo_search")
 async def cb_photo_search_start(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "photo_search"):
+        return
     await state.set_state(PhotoSearchState.waiting_photo)
     await answer_callback(
         call,
@@ -72,7 +75,8 @@ async def cb_photo_search_start(call: types.CallbackQuery, state: FSMContext) ->
 @router.message(PhotoSearchState.waiting_photo, F.photo | F.document)
 async def on_photo_received(message: types.Message, state: FSMContext) -> None:
     telegram_id = str(message.from_user.id)
-    status = await message.answer("🔎 Ищу на Brickognize…", reply_markup=main_kb)
+    kb = await get_main_keyboard(telegram_id)
+    status = await message.answer("🔎 Ищу на Brickognize…", reply_markup=kb)
 
     try:
         image_bytes, filename = await _download_telegram_image(message)
@@ -94,7 +98,7 @@ async def on_photo_received(message: types.Message, state: FSMContext) -> None:
         await status.edit_text(
             f"Сервис распознавания недоступен ({e.response.status_code}). "
             "Попробуйте позже.",
-            reply_markup=main_kb,
+            reply_markup=kb,
         )
         await state.clear()
         return
@@ -102,7 +106,7 @@ async def on_photo_received(message: types.Message, state: FSMContext) -> None:
         logger.exception("Brickognize error")
         await status.edit_text(
             "Не удалось распознать фото. Попробуйте другой ракурс или освещение.",
-            reply_markup=main_kb,
+            reply_markup=kb,
         )
         await state.clear()
         return
@@ -113,7 +117,7 @@ async def on_photo_received(message: types.Message, state: FSMContext) -> None:
         await message.answer(
             "Ничего похожего на минифигурку не найдено.\n"
             "Попробуйте крупнее, на однотонном фоне.",
-            reply_markup=main_kb,
+            reply_markup=kb,
         )
         await state.clear()
         return

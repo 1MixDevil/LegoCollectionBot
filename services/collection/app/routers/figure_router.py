@@ -8,7 +8,8 @@ from app.core.db import get_db
 from app.schemas.figure_schema import (
     CollectTypeCreate, CollectTypeRead,
     FigureCreate, FigureRead, FigureUpdate, FigureDetail, SimilarFigure, BulkAddResponse, BulkAddError,
-    FigureToUserCreate, FigureToUserRead, FigureToUserUpdate, FigureToUserReadFull, FigureInfo
+    FigureToUserCreate, FigureToUserRead, FigureToUserUpdate, FigureToUserReadFull, FigureInfo,
+    FigureBrief,
 )
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
@@ -20,7 +21,8 @@ from app.crud.figure_crud import (
     # FigureToUser
     list_user_figures, add_figure_to_user, update_user_figure, delete_user_figure,
     # detail
-    get_figure_detail, get_figure_info_crud, get_similar_figures, get_all_figures
+    get_figure_detail, get_figure_info_crud, get_similar_figures, get_all_figures,
+    search_figures_by_keyword,
 )
 
 from app.models.figures_model import FigureToUser
@@ -271,6 +273,21 @@ def find_similar_figures(
         SimilarFigure(id=r.id, name=r.name, bricklink_id=r.bricklink_id, similarity=r.similarity)
         for r in results
     ]
+
+@router.get(
+    "/search/",
+    response_model=List[FigureBrief],
+    status_code=status.HTTP_200_OK,
+    summary="Поиск фигурок по словам в названии",
+)
+def search_figures(
+    q: str = Query(..., min_length=1, description="Ключевые слова, напр. Clone Trooper"),
+    limit: int = Query(500, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    rows = search_figures_by_keyword(db, q, limit=limit)
+    return [FigureBrief(bricklink_id=f.bricklink_id, name=f.name) for f in rows]
+
 
 @router.get(
     "/all/",

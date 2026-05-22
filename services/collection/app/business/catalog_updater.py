@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.business.bricklink_catalog_list import (
+    GENERIC_THEME_NAMES,
     discover_series_metadata,
     fetch_minifigs_by_article,
 )
@@ -116,13 +117,14 @@ async def ensure_collect_type(db: Session, article: str) -> CollectType:
     if not meta:
         raise ValueError(
             f"Серия «{article}» не найдена на BrickLink. "
-            "Проверьте префикс (например lor, sw, hp)."
+            "Проверьте префикс (например lor, sw, hp, sim)."
         )
 
     ct = CollectType(
         article=article,
         name=str(meta["name"]),
         pad_len=int(meta["pad_len"]),
+        bricklink_cat_string=(str(meta.get("cat_string") or "").strip() or None),
     )
     db.add(ct)
     db.commit()
@@ -155,7 +157,16 @@ async def sync_from_bricklink_catalog(db: Session, article: str) -> dict:
     )
 
     try:
-        records = await fetch_minifigs_by_article(article, ct.name)
+        records, cat_used, cat_label = await fetch_minifigs_by_article(
+            article,
+            ct.name,
+            bricklink_cat=getattr(ct, "bricklink_cat_string", None) or None,
+        )
+        if cat_used:
+            ct.bricklink_cat_string = cat_used
+            if cat_label and ct.name.strip().lower() in GENERIC_THEME_NAMES:
+                ct.name = cat_label
+            db.commit()
     except RuntimeError as exc:
         return {
             "added": 0,

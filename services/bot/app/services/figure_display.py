@@ -93,7 +93,7 @@ def build_caption(
             lines.append(f"• В каталоге бота: {display_name}")
     else:
         lines.append(
-            "• ⚠️ Нет в каталоге бота — обновите серию через /update"
+            "• ⚠️ Нет в каталоге — «🔄 Обновить каталог» (админ) или «❓ Помощь»"
         )
 
     stats = collection_stats or {}

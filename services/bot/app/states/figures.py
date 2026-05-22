@@ -30,4 +30,19 @@ class PhotoSearchState(StatesGroup):
 
 class CreateTierList(StatesGroup):
     waiting_name_list = State()
+    waiting_mode = State()
     waiting_serials = State()
+
+
+class AdminPanelState(StatesGroup):
+    waiting_telegram_id = State()
+
+
+class HelpState(StatesGroup):
+    waiting_admin_message = State()
+
+
+class CollectionState(StatesGroup):
+    waiting_search = State()
+    waiting_remove = State()
+    waiting_info_serial = State()

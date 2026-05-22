@@ -10,6 +10,8 @@ class User(Base):
     id                 = Column(Integer, primary_key=True, index=True)
     username           = Column(String, unique=False, nullable=True)
     telegram_username  = Column(String, unique=True, nullable=False)
+    # admin | member | premium
+    role               = Column(String, nullable=False, default="member", server_default="member")
 
     settings = relationship("UserSettings", back_populates="user", uselist=False)
 

@@ -112,6 +112,16 @@ class SimilarFigure(BaseModel):
     class Config:
         orm_mode = True
 
+
+class FigureBrief(BaseModel):
+    """Краткая карточка фигурки для поиска / тир-листа."""
+
+    bricklink_id: str
+    name: str
+
+    class Config:
+        orm_mode = True
+
 class BulkAddError(BaseModel):
     index: int
     payload: dict

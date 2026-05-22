@@ -1,22 +1,31 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 from app.schemas.permissions_schema import PermissionGroupRead
+
+UserRole = Literal["admin", "member", "premium"]
 
 # Для создания пользователя
 class UserCreate(BaseModel):
     username: Optional[str] = Field(None, example="ivan")
     telegram_username: str = Field(..., example="ivan_telegram")
+    role: Optional[UserRole] = Field(None, example="member")
 
 # Для частичного обновления
 class UserUpdate(BaseModel):
     username: Optional[str] = Field(None, example="petr")
     telegram_username: Optional[str] = Field(None, example="petr_telegram")
+    role: Optional[UserRole] = None
+
+
+class UserRoleUpdate(BaseModel):
+    role: UserRole
 
 # Для чтения пользователя
 class UserRead(BaseModel):
     id: int
     username: Optional[str]
     telegram_username: str
+    role: str = "member"
     permission_groups: List[PermissionGroupRead] = []
 
     class Config:

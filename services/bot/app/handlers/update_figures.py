@@ -6,7 +6,8 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
 from app.api.collection import update_figures_list
-from app.keyboards.main import main_kb, nav_kb
+from app.core.access import ensure_access, get_main_keyboard
+from app.keyboards.main import nav_kb
 from app.states.figures import UpdateFigures
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def format_update_result(article: str, result: dict) -> str:
         return (
             f"⏳ Серия <code>{article}</code>: обновление уже запущено "
             f"(lock {age} сек назад).\n\n"
-            f"{message or 'Подождите минуту и повторите /update.'}"
+            f"{message or 'Подождите минуту и повторите через «🔄 Обновить каталог».'}"
         )
 
     if added > 0:
@@ -73,11 +74,15 @@ async def ask_article(message: types.Message, state: FSMContext) -> None:
 
 @router.message(Command("update"))
 async def cmd_update(message: types.Message, state: FSMContext):
+    if not await ensure_access(message, "update_catalog"):
+        return
     await ask_article(message, state)
 
 
 @router.callback_query(lambda cb: cb.data == "update")
 async def cb_update(call: types.CallbackQuery, state: FSMContext):
+    if not await ensure_access(call, "update_catalog"):
+        return
     await call.answer()
     await ask_article(call.message, state)
 
@@ -89,6 +94,8 @@ async def get_article(message: types.Message, state: FSMContext):
         await message.answer("Введите префикс, например sw.", reply_markup=nav_kb())
         return
 
+    telegram_id = str(message.from_user.id)
+    kb = await get_main_keyboard(telegram_id)
     status_msg = await message.answer(
         f"⏳ Загружаю каталог <code>{article}</code> с BrickLink…\n"
         "Обычно 10–60 сек.\n"
@@ -101,7 +108,7 @@ async def get_article(message: types.Message, state: FSMContext):
         result = await update_figures_list(article=article)
         logger.info("Ответ update: %s", result)
         text = format_update_result(article, result)
-        await status_msg.edit_text(text, parse_mode="HTML", reply_markup=main_kb)
+        await status_msg.edit_text(text, parse_mode="HTML", reply_markup=kb)
     except httpx.HTTPStatusError as e:
         detail = str(e)
         try:
@@ -113,13 +120,13 @@ async def get_article(message: types.Message, state: FSMContext):
         await status_msg.edit_text(
             f"❌ {detail}",
             parse_mode="HTML",
-            reply_markup=main_kb,
+            reply_markup=kb,
         )
     except Exception as e:
         logger.exception("Ошибка update")
         await status_msg.edit_text(
             f"❌ Ошибка обновления: {e}",
-            reply_markup=main_kb,
+            reply_markup=kb,
         )
     finally:
         await state.clear()

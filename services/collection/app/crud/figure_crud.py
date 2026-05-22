@@ -213,6 +213,24 @@ def get_similar_figures(db, typo: str, limit: int = 5, threshold: float = 0.3):
     )
     return query.all()
 
+def search_figures_by_keyword(
+    db: Session,
+    keyword: str,
+    limit: int = 500,
+) -> List[Figure]:
+    """
+    Все слова из keyword должны встречаться в name (без учёта регистра, порядок слов не важен).
+    """
+    words = [w.strip() for w in keyword.split() if w.strip()]
+    if not words:
+        return []
+
+    query = db.query(Figure)
+    for word in words:
+        query = query.filter(Figure.name.ilike(f"%{word}%"))
+    return query.order_by(Figure.bricklink_id).limit(limit).all()
+
+
 def get_all_figures(db: Session, prefix: Optional[str] = None) -> List[str]:
     """
     Запрашивает из БД все bricklink_id; если передан `prefix`, то только начи-

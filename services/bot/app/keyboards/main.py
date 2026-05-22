@@ -1,32 +1,183 @@
 from aiogram import types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-# === Inline‑клавиатуры ===
+from app.core.permissions import ROLE_LABELS, can_access
 
-# 1. Главное меню
-main_kb = InlineKeyboardMarkup(inline_keyboard=[
-    [
-        InlineKeyboardButton(text="📦 Моя коллекция", callback_data="my_collection"),
-        InlineKeyboardButton(text="➕ Добавить",       callback_data="add"),
-    ],
-    [
-        InlineKeyboardButton(text="🔎 Поиск по фото",  callback_data="photo_search"),
-        InlineKeyboardButton(text="📋 Желаемое",       callback_data="wishlist"),
-    ],
-    [
-        InlineKeyboardButton(text="🏷 Tier‑лист",      callback_data="create_tierlist"),
-    ],
-    [
-        InlineKeyboardButton(text="🔄 Обновить каталог", callback_data="update"),
-        InlineKeyboardButton(text="⚙ Настройки",         callback_data="settings"),
-    ],
-    [
-        InlineKeyboardButton(text="🛒 Торговля",          callback_data="marketplace"),
-    ],
-    [
-        InlineKeyboardButton(text="❓ Помощь",          callback_data="help"),
-    ],
-])
+
+def _row(*buttons: InlineKeyboardButton | None) -> list[InlineKeyboardButton]:
+    return [b for b in buttons if b is not None]
+
+
+def build_main_kb(role: str) -> InlineKeyboardMarkup:
+    """Главное меню с учётом роли."""
+    rows: list[list[InlineKeyboardButton]] = []
+
+    row1 = _row(
+        InlineKeyboardButton(text="📦 Моя коллекция", callback_data="my_collection")
+        if can_access(role, "my_collection")
+        else None,
+        InlineKeyboardButton(text="➕ Добавить", callback_data="add")
+        if can_access(role, "add")
+        else None,
+    )
+    if row1:
+        rows.append(row1)
+
+    row2 = _row(
+        InlineKeyboardButton(text="🔎 Поиск по фото", callback_data="photo_search")
+        if can_access(role, "photo_search")
+        else None,
+        InlineKeyboardButton(text="📋 Желаемое", callback_data="wishlist")
+        if can_access(role, "wishlist")
+        else None,
+    )
+    if row2:
+        rows.append(row2)
+
+    if can_access(role, "tierlist"):
+        rows.append(
+            [InlineKeyboardButton(text="🏷 Tier‑лист", callback_data="create_tierlist")]
+        )
+
+    row3 = _row(
+        InlineKeyboardButton(text="🔄 Обновить каталог", callback_data="update")
+        if can_access(role, "update_catalog")
+        else None,
+        InlineKeyboardButton(text="⚙ Настройки", callback_data="settings")
+        if can_access(role, "settings")
+        else None,
+    )
+    if row3:
+        rows.append(row3)
+
+    if can_access(role, "marketplace"):
+        rows.append(
+            [InlineKeyboardButton(text="🛒 Торговля", callback_data="marketplace")]
+        )
+
+    if can_access(role, "help"):
+        rows.append([InlineKeyboardButton(text="❓ Помощь", callback_data="help")])
+
+    if can_access(role, "admin_panel"):
+        rows.append(
+            [InlineKeyboardButton(text="🛡 Админ‑панель", callback_data="admin_panel")]
+        )
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# Обратная совместимость (полное меню админа)
+main_kb = build_main_kb("admin")
+
+
+def tierlist_mode_kb(role: str) -> InlineKeyboardMarkup:
+    """Выбор способа заполнения tier‑листа."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if can_access(role, "tierlist_serials"):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="📦 По артикулам",
+                    callback_data="tierlist_mode:serials",
+                )
+            ]
+        )
+    if can_access(role, "tierlist_keyword"):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔤 По названию",
+                    callback_data="tierlist_mode:keyword",
+                )
+            ]
+        )
+    if can_access(role, "tierlist_all"):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🌐 Вся серия",
+                    callback_data="tierlist_mode:all",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="↩️ Назад", callback_data="cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_panel_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔍 Найти по Telegram ID",
+                    callback_data="admin_find_user",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="👥 Список пользователей",
+                    callback_data="admin_users:0",
+                )
+            ],
+            [InlineKeyboardButton(text="↩️ Назад", callback_data="cancel")],
+        ]
+    )
+
+
+def admin_role_kb(user_id: int, current_role: str) -> InlineKeyboardMarkup:
+    buttons = []
+    for role in ("member", "premium", "admin"):
+        label = ROLE_LABELS[role]
+        prefix = "✓ " if role == current_role else ""
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{prefix}{label}",
+                    callback_data=f"admin_role:{user_id}:{role}",
+                )
+            ]
+        )
+    buttons.append(
+        [InlineKeyboardButton(text="↩️ В админ‑панель", callback_data="admin_panel")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_users_list_kb(
+    users: list[dict],
+    page: int,
+    page_size: int = 8,
+) -> InlineKeyboardMarkup:
+    start = page * page_size
+    chunk = users[start : start + page_size]
+    rows: list[list[InlineKeyboardButton]] = []
+    for u in chunk:
+        tid = u.get("telegram_username", "?")
+        name = u.get("username") or "—"
+        role = u.get("role", "member")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{name} ({tid}) · {ROLE_LABELS.get(role, role)}",
+                    callback_data=f"admin_pick:{u['id']}",
+                )
+            ]
+        )
+    nav: list[InlineKeyboardButton] = []
+    if start > 0:
+        nav.append(
+            InlineKeyboardButton(text="◀️", callback_data=f"admin_users:{page - 1}")
+        )
+    if start + page_size < len(users):
+        nav.append(
+            InlineKeyboardButton(text="▶️", callback_data=f"admin_users:{page + 1}")
+        )
+    if nav:
+        rows.append(nav)
+    rows.append(
+        [InlineKeyboardButton(text="↩️ В админ‑панель", callback_data="admin_panel")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 # 2. Подменю «Моя коллекция»
 collection_kb = InlineKeyboardMarkup(inline_keyboard=[

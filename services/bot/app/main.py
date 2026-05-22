@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from app.api.auth import create_user
+from app.content.guide import USER_GUIDE_HTML
 from app.core.config import TG_TOKEN
 from app.handlers.add_figure import router as add_figure_router
 from app.handlers.cancel import router as cancel_router
@@ -18,7 +19,10 @@ from app.handlers.my_collection import router as my_collection_router
 from app.handlers.settings import router as settings_router
 from app.handlers.stubs import router as stubs_router
 from app.handlers.update_figures import router as update_figures_router
-from app.keyboards.main import main_kb, prompt_kb
+from app.core.access import get_main_keyboard
+from app.handlers.admin_panel import router as admin_panel_router
+from app.handlers.help import router as help_router
+from app.keyboards.main import prompt_kb
 from app.states.figures import AddFigureState
 from app.utils.message import answer_callback
 
@@ -35,16 +39,18 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         await message.answer("Ошибка при связывании с сервисом авторизации.")
         return
 
-    if created:
-        await message.answer(
-            f"Привет, {name}! Ваш аккаунт создан.",
-            reply_markup=main_kb,
-        )
-    else:
-        await message.answer(
-            f"С возвращением, {name}!",
-            reply_markup=main_kb,
-        )
+    kb = await get_main_keyboard(tg_id)
+    greeting = (
+        f"Привет, {name}! Ваш аккаунт создан."
+        if created
+        else f"С возвращением, {name}!"
+    )
+    await message.answer(greeting)
+    try:
+        await message.answer(USER_GUIDE_HTML, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        logger.exception("Failed to send guide HTML, fallback to plain text")
+        await message.answer(USER_GUIDE_HTML.replace("<b>", "").replace("</b>", ""), reply_markup=kb)
 
 
 async def cmd_back_to_serial(call: types.CallbackQuery, state: FSMContext) -> None:
@@ -72,9 +78,11 @@ async def main() -> None:
     )
 
     dp.include_router(cancel_router)
+    dp.include_router(admin_panel_router)
     dp.include_router(my_collection_router)
     dp.include_router(add_figure_router)
     dp.include_router(photo_search_router)
+    dp.include_router(help_router)
     dp.include_router(stubs_router)
     dp.include_router(update_figures_router)
     dp.include_router(delete_figure_router)

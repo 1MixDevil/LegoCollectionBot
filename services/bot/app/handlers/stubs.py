@@ -2,6 +2,8 @@
 
 from aiogram import F, Router, types
 
+from app.core.access import ensure_access
+
 router = Router()
 
 STUB_MESSAGE = "Функционал пока не реализован."
@@ -13,18 +15,26 @@ STUB_CALLBACKS = frozenset({
     "browse_listings",
     "wishlist",
     "toggle_wishlist_visibility",
-    "help",
-    "faq",
-    "feedback",
     "premium",
     "bind_bricklink",
     "toggle_notifications",
     "list_tierlists",
 })
 
+STUB_FEATURES = {
+    "marketplace": "marketplace",
+    "my_listings": "marketplace",
+    "browse_listings": "marketplace",
+    "wishlist": "wishlist",
+    "toggle_wishlist_visibility": "wishlist",
+}
+
 
 @router.callback_query(F.data.in_(STUB_CALLBACKS))
 async def cb_not_implemented_exact(call: types.CallbackQuery) -> None:
+    feature = STUB_FEATURES.get(call.data)
+    if feature and not await ensure_access(call, feature):
+        return
     await call.answer(STUB_MESSAGE, show_alert=True)
 
 

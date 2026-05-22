@@ -42,5 +42,9 @@ class CollectType(Base):
     name    = Column(String, unique=False, nullable=False) #Star Wars
     article = Column(String, unique=True, nullable=False) #sw
     pad_len = Column(Integer, unique=False, nullable=False) # 4(sw/1234/)
+    # Категория BrickLink catalogList (находится автоматически, не в коде)
+    bricklink_cat_string = Column(String, nullable=True)
+    # Кэш категории BrickLink catalogList (находится автоматически, не в коде)
+    bricklink_cat_string = Column(String, nullable=True)
 
     figures = relationship("Figure", back_populates="type_collected")

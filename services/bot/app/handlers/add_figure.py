@@ -28,9 +28,14 @@ from app.api.collection import (
 
 )
 
+from app.content.ui_messages import (
+    MSG_CATALOG_MISSING_PREFIX,
+    MSG_INVALID_PRICE_RESTART,
+    MSG_SESSION_RESET_ADD,
+)
+from app.core.access import get_main_keyboard
 from app.core.config import MAX_SERIALS_PER_REQUEST
-
-from app.keyboards.main import add_choice_kb, main_kb, prompt_kb
+from app.keyboards.main import add_choice_kb, prompt_kb
 
 from app.states.figures import AddFigureState, BulkAddState
 
@@ -40,6 +45,9 @@ from app.utils.message import answer_callback, safe_edit_or_answer
 
 router = Router()
 
+
+async def _main_kb(user_id: int):
+    return await get_main_keyboard(str(user_id))
 
 
 FIELD_NAMES_RU = {
@@ -150,13 +158,8 @@ def _figure_not_found_message(serial: str, detail: str | None = None) -> str:
 
     base = f"Фигурка <code>{serial}</code> не найдена в каталоге."
 
-    hint = (
-
-        "\n\nСначала обновите каталог: /update → префикс серии "
-
-        f"(например <code>{serial[:2]}</code>)."
-
-    )
+    prefix = serial[: max(2, len(serial.rstrip("0123456789")))] or serial[:2]
+    hint = MSG_CATALOG_MISSING_PREFIX.format(prefix=prefix)
 
     if detail and "не найдена" in detail.lower():
 
@@ -336,7 +339,7 @@ async def _process_bulk_serials(
 
             "Ошибка получения настроек пользователя.",
 
-            reply_markup=main_kb,
+            reply_markup=await _main_kb(message.from_user.id),
 
         )
 
@@ -404,9 +407,16 @@ async def _process_bulk_serials(
 
                 lines.append(f"… и ещё {len(failures) - 10}")
 
-            lines.append("\nОбновите каталог через /update.")
+            lines.append(
+                "\nСерия может отсутствовать в каталоге — "
+                "«🔄 Обновить каталог» (админ) или «❓ Помощь» → администратор."
+            )
 
-        await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=main_kb)
+        await message.answer(
+            "\n".join(lines),
+            parse_mode="HTML",
+            reply_markup=await _main_kb(message.from_user.id),
+        )
 
     except HTTPStatusError as e:
 
@@ -414,13 +424,16 @@ async def _process_bulk_serials(
 
             f"Ошибка при добавлении ({e.response.status_code}).",
 
-            reply_markup=main_kb,
+            reply_markup=await _main_kb(message.from_user.id),
 
         )
 
     except Exception as e:
 
-        await message.answer(f"Ошибка при добавлении: {e}", reply_markup=main_kb)
+        await message.answer(
+            f"Ошибка при добавлении: {e}",
+            reply_markup=await _main_kb(message.from_user.id),
+        )
 
     finally:
 
@@ -431,9 +444,11 @@ async def _process_bulk_serials(
 
 
 @router.callback_query(F.data == "add")
-
 async def cb_add_choice(call: types.CallbackQuery, state: FSMContext):
+    from app.core.access import ensure_access
 
+    if not await ensure_access(call, "add"):
+        return
     await answer_callback(
 
         call,
@@ -583,7 +598,7 @@ async def add_serial(message: types.Message, state: FSMContext):
 
             "Ошибка получения настроек пользователя.",
 
-            reply_markup=main_kb,
+            reply_markup=await _main_kb(message.from_user.id),
 
         )
 
@@ -745,9 +760,9 @@ async def finish_add_figure(message: types.Message, state: FSMContext):
 
         await message.answer(
 
-            "Сессия сброшена. Начните добавление заново: /add",
+            MSG_SESSION_RESET_ADD,
 
-            reply_markup=main_kb,
+            reply_markup=await get_main_keyboard(str(message.from_user.id)),
 
         )
 
@@ -787,9 +802,9 @@ async def finish_add_figure(message: types.Message, state: FSMContext):
 
         await message.answer(
 
-            "Некорректный формат цены. Начните заново: /add",
+            MSG_INVALID_PRICE_RESTART,
 
-            reply_markup=main_kb,
+            reply_markup=await get_main_keyboard(str(message.from_user.id)),
 
         )
 
@@ -823,7 +838,7 @@ async def finish_add_figure(message: types.Message, state: FSMContext):
 
             "✅ Фигурка успешно добавлена в вашу коллекцию.",
 
-            reply_markup=main_kb,
+            reply_markup=await _main_kb(message.from_user.id),
 
         )
 
@@ -851,7 +866,7 @@ async def finish_add_figure(message: types.Message, state: FSMContext):
 
                 f"Данные не прошли проверку:\n{formatted}",
 
-                reply_markup=main_kb,
+                reply_markup=await _main_kb(message.from_user.id),
 
             )
 
@@ -907,7 +922,7 @@ async def finish_add_figure(message: types.Message, state: FSMContext):
 
                     parse_mode="HTML",
 
-                    reply_markup=main_kb,
+                    reply_markup=await _main_kb(message.from_user.id),
 
                 )
 
@@ -917,7 +932,7 @@ async def finish_add_figure(message: types.Message, state: FSMContext):
 
                 f"Ошибка сервера ({status}). Попробуйте позже.",
 
-                reply_markup=main_kb,
+                reply_markup=await _main_kb(message.from_user.id),
 
             )
 
@@ -929,7 +944,7 @@ async def finish_add_figure(message: types.Message, state: FSMContext):
 
             f"Не удалось добавить фигурку. Попробуйте позже.\n({type(e).__name__})",
 
-            reply_markup=main_kb,
+            reply_markup=await _main_kb(message.from_user.id),
 
         )
 
@@ -991,7 +1006,11 @@ async def cb_suggest_choice(call: types.CallbackQuery, state: FSMContext):
 
 async def cb_suggest_cancel(call: types.CallbackQuery, state: FSMContext):
 
-    await answer_callback(call, "Операция отменена.", reply_markup=main_kb)
+    await answer_callback(
+        call,
+        "Операция отменена.",
+        reply_markup=await _main_kb(call.from_user.id),
+    )
 
     await state.clear()
 

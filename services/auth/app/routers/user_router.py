@@ -4,7 +4,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import NoResultFound
 
 from app.core.db import get_db
-from app.schemas.user_schema import UserCreate, UserRead, UserUpdate, UserSettingsUpdate, UserSettingsRead
+from app.schemas.user_schema import (
+    UserCreate,
+    UserRead,
+    UserRoleUpdate,
+    UserSettingsRead,
+    UserSettingsUpdate,
+    UserUpdate,
+)
 from app.crud.user_crud import (
     create_user,
     get_user,
@@ -13,6 +20,7 @@ from app.crud.user_crud import (
     delete_user,
     add_group_to_user,
     remove_group_from_user,
+    set_user_role,
 )
 from app.models.user_model import User, UserSettings
 
@@ -46,6 +54,12 @@ def read_user_by_telegram(telegram_username: str, db: Session = Depends(get_db))
     user = db.query(User).filter(User.telegram_username == telegram_username).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    from app.crud.user_crud import _bootstrap_role
+
+    if _bootstrap_role(telegram_username, None) == "admin" and user.role != "admin":
+        user.role = "admin"
+        db.commit()
+        db.refresh(user)
     return user
 
 
@@ -59,6 +73,21 @@ def read_user(user_id: int, db: Session = Depends(get_db)):
         return get_user(db, user_id)
     except NoResultFound as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+@router.patch(
+    "/{user_id}/role",
+    response_model=UserRead,
+)
+def update_user_role_endpoint(
+    user_id: int,
+    data: UserRoleUpdate,
+    db: Session = Depends(get_db),
+):
+    try:
+        return set_user_role(db, user_id, data.role)
+    except NoResultFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 
 @router.patch(
     "/{user_id}",

@@ -94,6 +94,32 @@ async def get_figure_info(telegram_id: str, bricklink_id: str) -> dict[str, Any]
         return response.json()
 
 
+async def search_figures_by_keyword(
+    keyword: str,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{COLLECTION_BASE_URL}/figure/search/",
+            params={"q": keyword, "limit": limit},
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def fetch_all_catalog_serials(prefix: str | None = None) -> list[str]:
+    params = {}
+    if prefix:
+        params["prefix"] = prefix
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.get(
+            f"{COLLECTION_BASE_URL}/figure/all/",
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
 async def add_figure_to_user_bulk(
     telegram_id: str,
     payloads: list[dict[str, Any]],
