@@ -1,73 +1,84 @@
-version: "3.8"
 services:
-  portainer:
-      image: portainer/portainer-ce:latest
-      container_name: portainer
-      ports:
-        - "9000:9000"
-      volumes:
-        - /var/run/docker.sock:/var/run/docker.sock 
-        - portainer_data:/data 
-      restart: always
-
-  authorization-service:
-    container_name: 'authorization'
-    build: ./AuthorizationService
-    volumes:
-      - ./AuthorizationService/:/app
-    ports:
-      - "${AUTHORIZATION_PORT}:${AUTHORIZATION_PORT}"
-    depends_on:
-      db:
-        condition: service_healthy
-    env_file:
-      - .env
-    restart: always
-
-  collection-service:
-    container_name: 'collection'
-    build: ./CollectionService
-    volumes:
-      - ./CollectionService/:/app
-    ports:
-      - "${COLLECTION_PORT}:${COLLECTION_PORT}"
-    depends_on:
-      db:
-        condition: service_healthy
-    env_file:
-      - .env
-    restart: always
-
-  # telegram-bot-service:
-  #   build: ./telegram-bot-service
-  #   container_name: 'telegram'
-  #   volumes:
-  #     - ./telegram-bot-service/:/app
-  #   env_file:
-  #     - .env
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #   restart: always
-
   db:
-    container_name: 'postgres'
+    container_name: postgres
     image: postgres:13.0-alpine
     volumes:
       - postgres_data:/var/lib/postgresql/data/
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     environment:
-      - POSTGRES_USER=aml1
-      - POSTGRES_PASSWORD=aml1
-    restart: always
+      POSTGRES_USER: aml1
+      POSTGRES_PASSWORD: aml1
+      POSTGRES_DB: lego_db
+    ports:
+      - "15432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER"]
+      test: ["CMD-SHELL", "pg_isready -U aml1 -d lego_db"]
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+  auth-service:
+    container_name: auth
+    build: ./services/auth
+    volumes:
+      - ./services/auth:/app
     ports:
-      - "5432:5432"
+      - "${AUTHORIZATION_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://aml1:aml1@db:5432/lego_db
+      POSTGRES_HOST: db
+      POSTGRES_USER: aml1
+      POSTGRES_PASSWORD: aml1
+      POSTGRES_DB: lego_db
+      AUTHORIZATION_PORT: "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  collection-service:
+    container_name: collection
+    build: ./services/collection
+    volumes:
+      - ./services/collection:/app
+    ports:
+      - "${COLLECTION_PORT:-8001}:8001"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://aml1:aml1@db:5432/lego_db
+      POSTGRES_HOST: db
+      POSTGRES_USER: aml1
+      POSTGRES_PASSWORD: aml1
+      POSTGRES_DB: lego_db
+      COLLECTION_PORT: "8001"
+      CATALOG_DATA_SOURCE: ${CATALOG_DATA_SOURCE:-rebrickable}
+      REBRICKABLE_REQUEST_INTERVAL: ${REBRICKABLE_REQUEST_INTERVAL:-1.05}
+      DISPLAY_CURRENCY: ${DISPLAY_CURRENCY:-RUB}
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  bot-service:
+    container_name: telegram-bot
+    build: ./services/bot
+    volumes:
+      - ./services/bot:/app
+    environment:
+      AUTHORIZATION_IP: auth-service
+      AUTHORIZATION_PORT: "8000"
+      COLLECTION_IP: collection-service
+      COLLECTION_PORT: "8001"
+    depends_on:
+      - auth-service
+      - collection-service
+    env_file:
+      - .env
+    restart: unless-stopped
 
 volumes:
   postgres_data:
-  portainer_data:
