@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any, Optional
@@ -15,6 +16,8 @@ from app.api.collection import get_figure_info, get_figure_market, list_user_fig
 from app.keyboards.main import make_info_kb
 
 logger = logging.getLogger(__name__)
+
+LOADING_CARD_TEXT = "⏳ Ожидайте, открываю информацию о фигурке…"
 
 
 def bricklink_catalog_url(bricklink_id: str) -> str:
@@ -189,8 +192,6 @@ def build_caption(
             "• ⚠️ Нет в каталоге — «🔄 Обновить каталог» (админ) или «❓ Помощь»"
         )
 
-    lines.extend(_format_market_lines(market, bricklink_id))
-
     stats = collection_stats or {}
     count = stats.get("count", 0)
     for_sale = stats.get("for_sale", 0)
@@ -228,8 +229,53 @@ def build_caption(
             lines.append(f"• Заметка: {short}")
         if user_record.get("buy_date"):
             lines.append(f"• Дата покупки: {user_record.get('buy_date')}")
+        if user_record.get("sale_date"):
+            lines.append(f"• Дата продажи: {user_record.get('sale_date')}")
+
+    lines.extend(_format_market_lines(market, bricklink_id))
 
     return "\n".join(lines)
+
+
+async def _fetch_figure_card_data(
+    telegram_id: str,
+    bricklink_id: str,
+    *,
+    name: str | None = None,
+) -> tuple[bool, str | None, dict | None, dict | None, dict]:
+    bricklink_id = bricklink_id.lower()
+    in_catalog = True
+    catalog_name: str | None = name
+    user_record: dict | None = None
+    market: dict | None = None
+
+    async def fetch_info() -> None:
+        nonlocal in_catalog, catalog_name, user_record
+        try:
+            info = await get_figure_info(telegram_id, bricklink_id)
+            catalog_name = info.get("name") or name or bricklink_id
+            user_record = info.get("user_record")
+        except HTTPStatusError as e:
+            if e.response.status_code == 404:
+                in_catalog = False
+                catalog_name = name or bricklink_id
+            else:
+                raise
+
+    async def fetch_market() -> None:
+        nonlocal market
+        try:
+            market = await get_figure_market(bricklink_id)
+        except Exception:
+            logger.exception("market prices for %s", bricklink_id)
+            market = {"bricklink_id": bricklink_id, "error": "fetch_failed"}
+
+    stats, _, _ = await asyncio.gather(
+        get_user_figure_stats(telegram_id, bricklink_id),
+        fetch_info(),
+        fetch_market(),
+    )
+    return in_catalog, catalog_name, user_record, market, stats
 
 
 async def send_figure_card(
@@ -245,29 +291,9 @@ async def send_figure_card(
 ) -> bool:
     """Отправляет фото/текст с карточкой. Возвращает True, если фигурка есть в каталоге БД."""
     bricklink_id = bricklink_id.lower()
-    in_catalog = True
-    catalog_name: str | None = name
-    user_record: dict | None = None
-    market: dict | None = None
-
-    try:
-        info = await get_figure_info(telegram_id, bricklink_id)
-        catalog_name = info.get("name") or name or bricklink_id
-        user_record = info.get("user_record")
-    except HTTPStatusError as e:
-        if e.response.status_code == 404:
-            in_catalog = False
-            catalog_name = name or bricklink_id
-        else:
-            raise
-
-    try:
-        market = await get_figure_market(bricklink_id)
-    except Exception:
-        logger.exception("market prices for %s", bricklink_id)
-        market = {"bricklink_id": bricklink_id, "error": "fetch_failed"}
-
-    stats = await get_user_figure_stats(telegram_id, bricklink_id)
+    in_catalog, catalog_name, user_record, market, stats = await _fetch_figure_card_data(
+        telegram_id, bricklink_id, name=name
+    )
     caption = build_caption(
         name=catalog_name or bricklink_id,
         bricklink_id=bricklink_id,
@@ -308,3 +334,34 @@ async def send_figure_card(
         )
 
     return in_catalog
+
+
+async def send_figure_card_with_loading(
+    bot: Bot,
+    chat_id: int,
+    telegram_id: str,
+    bricklink_id: str,
+    *,
+    name: str | None = None,
+    bricklink_url: str | None = None,
+    recognition_score: float | None = None,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> bool:
+    """Карточка с сообщением «загрузка» (удаляется после отправки)."""
+    status = await bot.send_message(chat_id, LOADING_CARD_TEXT)
+    try:
+        return await send_figure_card(
+            bot,
+            chat_id,
+            telegram_id,
+            bricklink_id,
+            name=name,
+            bricklink_url=bricklink_url,
+            recognition_score=recognition_score,
+            reply_markup=reply_markup,
+        )
+    finally:
+        try:
+            await status.delete()
+        except Exception:
+            pass

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from aiogram import types
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+
+from app.utils.telegram_network import safe_callback_answer, with_telegram_retry
 
 
 async def safe_edit_or_answer(
@@ -24,14 +26,20 @@ async def safe_edit_or_answer(
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
             )
-        except TelegramBadRequest:
+        except (TelegramBadRequest, TelegramNetworkError):
             pass
 
-    return await message.answer(
-        text,
-        reply_markup=reply_markup,
-        parse_mode=parse_mode,
-    )
+    try:
+        return await with_telegram_retry(
+            lambda: message.answer(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            ),
+            label="message.answer",
+        )
+    except TelegramNetworkError:
+        raise
 
 
 async def answer_callback(
@@ -41,7 +49,7 @@ async def answer_callback(
     reply_markup=None,
     parse_mode: str | None = None,
 ) -> types.Message:
-    await call.answer()
+    await safe_callback_answer(call)
     return await safe_edit_or_answer(
         call.message,
         text,

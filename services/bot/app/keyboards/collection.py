@@ -3,6 +3,8 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app.keyboards.main import make_info_kb
 from app.services.collection_stats import PICK_PAGE_SIZE, figure_button_label
 
+PAGE_PICKER_ROW = 6
+
 
 def collection_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -32,6 +34,33 @@ def collection_menu_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="↩️ В главное меню", callback_data="cancel")],
         ]
     )
+
+
+def collection_page_picker_kb(current_page: int, total_pages: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for p in range(total_pages):
+        label = f"·{p + 1}·" if p == current_page else str(p + 1)
+        row.append(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"collection_browse:{p}",
+            )
+        )
+        if len(row) >= PAGE_PICKER_ROW:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="↩️ Назад к списку",
+                callback_data="collection_browse_resume",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def collection_browse_kb(
@@ -68,8 +97,8 @@ def collection_browse_kb(
             )
         nav.append(
             InlineKeyboardButton(
-                text=f"{page + 1}/{pages}",
-                callback_data="collection_browse:noop",
+                text=f"📄 {page + 1}/{pages}",
+                callback_data="collection_pages",
             )
         )
         if page < pages - 1:
@@ -86,10 +115,6 @@ def collection_browse_kb(
             InlineKeyboardButton(
                 text="🔍 Поиск в списке",
                 callback_data="collection_find",
-            ),
-            InlineKeyboardButton(
-                text="📋 Все фигурки",
-                callback_data="collection_browse_all",
             ),
         ]
     )

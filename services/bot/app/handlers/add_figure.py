@@ -34,7 +34,6 @@ from app.content.ui_messages import (
     MSG_SESSION_RESET_ADD,
 )
 from app.core.access import get_main_keyboard
-from app.core.config import MAX_SERIALS_PER_REQUEST
 from app.keyboards.main import add_choice_kb, prompt_kb
 
 from app.states.figures import AddFigureState, BulkAddState
@@ -111,6 +110,13 @@ def _parse_optional_price(value) -> float | None:
 def _parse_serials_from_text(text: str) -> list[str]:
 
     return [s.strip().lower() for s in re.split(r"[,;\s]+", text) if s.strip()]
+
+
+def _bulk_entry_dates(settings: dict) -> tuple[str | None, str | None]:
+    """Массовое добавление: только дата покупки (продажа — при указании цены продажи)."""
+    if not settings.get("auto_fill_dates"):
+        return None, None
+    return date.today().isoformat(), None
 
 
 
@@ -313,22 +319,6 @@ async def _process_bulk_serials(
 
         return
 
-
-
-    if len(serials) > MAX_SERIALS_PER_REQUEST:
-
-        await message.answer(
-
-            f"❗️ Можно добавить не более {MAX_SERIALS_PER_REQUEST} артикулов за раз.",
-
-            reply_markup=prompt_kb(back="add"),
-
-        )
-
-        return
-
-
-
     try:
 
         settings = await get_user_settings(tg_id)
@@ -349,28 +339,18 @@ async def _process_bulk_serials(
 
 
 
-    today = date.today().isoformat() if settings.get("auto_fill_dates") else None
+    buy_date, sale_date = _bulk_entry_dates(settings)
 
     payloads = [
-
         {
-
             "bricklink_id": serial,
-
             "price_buy": None,
-
             "price_sale": None,
-
             "description": None,
-
-            "buy_date": today,
-
-            "sale_date": today,
-
+            "buy_date": buy_date,
+            "sale_date": sale_date,
         }
-
         for serial in serials
-
     ]
 
 
@@ -491,9 +471,8 @@ async def cb_add_few(call: types.CallbackQuery, state: FSMContext):
 
         call,
 
-        f"Введите артикулы через запятую или «;», либо отправьте .txt файл "
-
-        f"(максимум {MAX_SERIALS_PER_REQUEST}):",
+        "Введите артикулы через запятую или «;», либо отправьте .txt файл "
+        "(по одному артикулу в строке или через запятую):",
 
         reply_markup=prompt_kb(back="add"),
 
@@ -779,14 +758,11 @@ async def finish_add_figure(message: types.Message, state: FSMContext):
     sale_date = None
 
     if settings.get("auto_fill_dates"):
-
+        today = date.today().isoformat()
         if state_data.get("price_buy") is not None:
-
-            buy_date = date.today().isoformat()
-
+            buy_date = today
         if state_data.get("price_sale") is not None:
-
-            sale_date = date.today().isoformat()
+            sale_date = today
 
 
 

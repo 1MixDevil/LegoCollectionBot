@@ -2,27 +2,24 @@ import logging
 import os
 import re
 
-from aiogram import Bot, Router, types
-from aiogram.exceptions import TelegramBadRequest
+from aiogram import Router, types
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile
 
 from app.api.collection import fetch_all_catalog_serials, search_figures_by_keyword
 from app.core.access import ensure_access, get_main_keyboard, get_user_role
 from app.core.config import MAX_SERIALS_PER_REQUEST
 from app.core.permissions import can_access
 from app.keyboards.main import nav_kb, tierlist_mode_kb
-from app.services.collage import StarWarsCollageGenerator
+from app.services.collage_delivery import (
+    COLLAGE_BATCH_SIZE as BATCH_SIZE,
+    generate_and_send_collage,
+    send_collage_batches,
+)
 from app.states.figures import CreateTierList
 
 logger = logging.getLogger(__name__)
 router = Router()
-TMP_DIR = os.getenv("TMP_DIR", "/tmp")
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", 100))
 TIERLIST_KEYWORD_MAX = int(os.getenv("TIERLIST_KEYWORD_MAX", "500"))
-PREFIX_URL = os.getenv(
-    "COLL_PREFIX_URL", "https://img.bricklink.com/ItemImage/MN/0"
-)
 
 # Артикул BrickLink: sw0001a, lor129, hp0023
 SERIAL_RE = re.compile(r"^[a-z][a-z0-9]*\d+[a-z]?$", re.IGNORECASE)
@@ -276,12 +273,15 @@ async def _handle_keyword_mode(
         f"Найдено <b>{len(records)}</b> фигурок. Собираю коллаж…",
         parse_mode="HTML",
     )
-    await _send_collage_batches(
+    kb = await _main_kb(telegram_id)
+    await send_collage_batches(
         message,
         records,
         title=title,
         telegram_id=telegram_id,
         caption_label=f"поиск: {keyword}",
+        caption_prefix="Тир-лист",
+        reply_markup=kb,
     )
 
 
@@ -293,9 +293,27 @@ async def _handle_serials_mode(
 ) -> None:
     await message.answer("Генерируем тир-лист…")
     records = [{"bricklink_id": s} for s in serials]
-    await _generate_and_send_collage(
-        records, telegram_id, title, message, attach_menu=True
-    )
+    kb = await _main_kb(telegram_id)
+    if len(records) <= BATCH_SIZE:
+        await generate_and_send_collage(
+            records,
+            telegram_id,
+            title,
+            message,
+            caption_extra="",
+            caption_prefix="Тир-лист",
+            reply_markup=kb,
+        )
+    else:
+        await send_collage_batches(
+            message,
+            records,
+            title=title,
+            telegram_id=telegram_id,
+            caption_label="",
+            caption_prefix="Тир-лист",
+            reply_markup=kb,
+        )
 
 
 async def _handle_all_mode(
@@ -327,209 +345,13 @@ async def _handle_all_mode(
         return
 
     records = [{"bricklink_id": s} for s in serials]
-    await _send_collage_batches(
+    kb = await _main_kb(telegram_id)
+    await send_collage_batches(
         message,
         records,
         title=title,
         telegram_id=telegram_id,
         caption_label=f"серия {prefix}",
+        caption_prefix="Тир-лист",
+        reply_markup=kb,
     )
-
-
-async def _update_status_message(
-    status: types.Message,
-    text: str,
-    *,
-    reply_markup=None,
-    parse_mode: str | None = "HTML",
-) -> types.Message:
-    """Обновить статус; при ошибке редактирования — новое сообщение (кнопки на старом не ломают процесс)."""
-    try:
-        await status.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
-        return status
-    except TelegramBadRequest:
-        return await status.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
-
-
-async def _build_collage_file(
-    records: list[dict],
-    telegram_id: str,
-    title: str,
-) -> tuple[str, str] | None:
-    """Собрать PNG во временный файл. Возвращает (path, filename) или None."""
-    images = await StarWarsCollageGenerator.fetch_and_prepare_images_async(
-        records=records,
-        id_key="bricklink_id",
-        prefix_url=PREFIX_URL,
-        min_height=1050,
-        font_path="arial.ttf",
-        font_size=90,
-        max_connections=10,
-    )
-    if not images:
-        return None
-
-    base_name = f"tierlist_{telegram_id}{f'_{title}' if title else ''}.png"
-    base_name = re.sub(r'[<>:"/\\|?*]', "_", base_name)[:200]
-    if not base_name.endswith(".png"):
-        base_name += ".png"
-
-    output_path = os.path.join(TMP_DIR, base_name)
-    os.makedirs(TMP_DIR, exist_ok=True)
-    await StarWarsCollageGenerator.create_collage_async(
-        images=images,
-        output_path=output_path,
-        columns=5,
-        title=title or None,
-    )
-    return output_path, base_name
-
-
-async def _send_collage_file(
-    bot: Bot,
-    chat_id: int,
-    file_path: str,
-    filename: str,
-    caption: str,
-    *,
-    reply_markup=None,
-) -> None:
-    with open(file_path, "rb") as f:
-        doc = BufferedInputFile(f.read(), filename=filename)
-    await bot.send_document(
-        chat_id,
-        doc,
-        caption=caption,
-        reply_markup=reply_markup,
-    )
-
-
-async def _send_collage_batches(
-    message: types.Message,
-    records: list[dict],
-    *,
-    title: str,
-    telegram_id: str,
-    caption_label: str,
-) -> None:
-    if not records:
-        return
-
-    total = len(records)
-    chat_id = message.chat.id
-    bot = message.bot
-
-    if total <= BATCH_SIZE:
-        await _generate_and_send_collage(
-            records,
-            telegram_id,
-            title,
-            message,
-            caption_extra=caption_label,
-            attach_menu=True,
-        )
-        return
-
-    total_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
-    kb = await _main_kb(telegram_id)
-    status = await message.answer(
-        f"⏳ Собираю tier‑лист: 0/{total_batches} частей (по {BATCH_SIZE} шт.)…",
-        parse_mode="HTML",
-    )
-
-    sent = 0
-    for batch_no, start in enumerate(range(0, total, BATCH_SIZE), start=1):
-        batch = records[start : start + BATCH_SIZE]
-        batch_title = f"{title} {batch_no}/{total_batches}".strip()
-        await _update_status_message(
-            status,
-            f"⏳ Часть {batch_no}/{total_batches}: загрузка изображений…",
-        )
-
-        built = await _build_collage_file(batch, telegram_id, batch_title)
-        if not built:
-            await message.answer(
-                f"⚠️ Часть {batch_no}/{total_batches}: не удалось собрать коллаж.",
-            )
-            continue
-
-        file_path, filename = built
-        caption = f"Тир-лист {batch_title} ({caption_label})"
-        try:
-            await _update_status_message(
-                status,
-                f"⏳ Часть {batch_no}/{total_batches}: отправка файла…",
-            )
-            await _send_collage_file(
-                bot, chat_id, file_path, filename, caption.strip()
-            )
-            sent += 1
-        except Exception as e:
-            logger.exception("send collage batch %s", batch_no)
-            await message.answer(
-                f"⚠️ Часть {batch_no}/{total_batches}: ошибка отправки ({e}).",
-            )
-        finally:
-            try:
-                os.remove(file_path)
-            except OSError:
-                pass
-
-    if sent:
-        await _update_status_message(
-            status,
-            f"✅ Tier‑лист готов: отправлено <b>{sent}</b> из {total_batches} частей.",
-            reply_markup=kb,
-        )
-    else:
-        await _update_status_message(
-            status,
-            "❌ Не удалось отправить ни одной части tier‑листа.",
-            reply_markup=kb,
-        )
-
-
-async def _generate_and_send_collage(
-    records: list[dict],
-    telegram_id: str,
-    title: str,
-    message: types.Message,
-    caption_extra: str = "",
-    *,
-    attach_menu: bool = False,
-) -> None:
-    kb = await _main_kb(telegram_id) if attach_menu else None
-    built = await _build_collage_file(records, telegram_id, title)
-    if not built:
-        await message.answer(
-            f"Не удалось загрузить изображения"
-            f"{f' ({caption_extra})' if caption_extra else ''}.",
-            reply_markup=kb or await _main_kb(telegram_id),
-        )
-        return
-
-    file_path, filename = built
-    caption = f"Тир-лист {title or ''} готов!"
-    if caption_extra:
-        caption += f" ({caption_extra})"
-
-    try:
-        await _send_collage_file(
-            message.bot,
-            message.chat.id,
-            file_path,
-            filename,
-            caption.strip(),
-            reply_markup=kb,
-        )
-    except Exception as e:
-        logger.exception("send collage")
-        await message.answer(
-            f"Ошибка отправки файла: {e}",
-            reply_markup=kb or await _main_kb(telegram_id),
-        )
-    finally:
-        try:
-            os.remove(file_path)
-        except OSError:
-            pass

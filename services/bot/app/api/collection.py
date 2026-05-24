@@ -138,7 +138,9 @@ async def add_figure_to_user_bulk(
     for item in payloads:
         item["user_id"] = user_id
 
-    async with httpx.AsyncClient() as client:
+    # Без лимита на число записей; таймаут с запасом на большие списки
+    timeout = max(120.0, min(1800.0, 30.0 + len(payloads) * 0.15))
+    async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
             f"{COLLECTION_BASE_URL}/figure/user/bulk/",
             json=payloads,

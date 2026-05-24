@@ -18,8 +18,13 @@ BTN_HELP = "«❓ Помощь»"
 BTN_CONTACT_ADMIN = "«✉️ Связаться с администратором»"
 
 MSG_CATALOG_MISSING_PREFIX = (
-    f"\n\nСерии может не быть в базе. Админ: {BTN_UPDATE_CATALOG} → префикс "
-    "<code>{prefix}</code>. Остальным: {BTN_HELP} → {BTN_CONTACT_ADMIN}."
+    "\n\nСерии может не быть в базе. Админ: "
+    + BTN_UPDATE_CATALOG
+    + " → префикс <code>{prefix}</code>. Остальным: "
+    + BTN_HELP
+    + " → "
+    + BTN_CONTACT_ADMIN
+    + "."
 )
 
 MSG_CATALOG_MISSING_SHORT = (

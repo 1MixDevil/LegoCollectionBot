@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import tempfile
 from io import BytesIO
 
 import pandas as pd
@@ -19,6 +18,7 @@ from app.keyboards.collection import (
     collection_confirm_clear_kb,
     collection_figure_kb,
     collection_menu_kb,
+    collection_page_picker_kb,
 )
 from app.keyboards.main import prompt_kb
 from app.services.collection_stats import (
@@ -29,17 +29,17 @@ from app.services.collection_stats import (
     unique_figure_entries,
 )
 from app.services.collage import StarWarsCollageGenerator
-from app.services.figure_display import send_figure_card
+from app.services.collage_delivery import (
+    COLLAGE_BATCH_SIZE,
+    send_collage_batches,
+)
+from app.services.figure_display import send_figure_card_with_loading
 from app.states.figures import CollectionState
 from app.utils.message import safe_edit_or_answer
 
 logger = logging.getLogger(__name__)
 router = Router()
 
-PREFIX_URL = os.getenv("COLL_PREFIX_URL", "https://img.bricklink.com/ItemImage/MN/0")
-MIN_HEIGHT = int(os.getenv("COLL_MIN_HEIGHT", "1050"))
-COLS = int(os.getenv("COLL_COLUMNS", "5"))
-MAX_CONN = int(os.getenv("CONCURRENT_BATCHES", "5"))
 PICK_PAGE_SIZE = int(os.getenv("COLLECTION_PICK_PAGE_SIZE", str(PICK_PAGE_SIZE)))
 
 
@@ -55,15 +55,27 @@ async def _load_records(telegram_id: str) -> list[dict]:
     ]
 
 
+async def _enter_collection_search_mode(state: FSMContext) -> None:
+    """После входа в коллекцию текст в чате = поиск."""
+    await state.set_state(CollectionState.browsing)
+    await state.update_data(coll_query="", coll_page=0)
+
+
 async def _show_collection_home(
     target: types.Message,
     telegram_id: str,
+    state: FSMContext,
     *,
     edit: bool = False,
 ) -> None:
     records = await _load_records(telegram_id)
     text = build_collection_summary(records)
     kb = collection_menu_kb() if records else await _main_kb(int(telegram_id))
+
+    if records:
+        await _enter_collection_search_mode(state)
+    else:
+        await state.clear()
 
     if edit and target.text:
         await safe_edit_or_answer(target, text, parse_mode="HTML", reply_markup=kb)
@@ -100,6 +112,7 @@ async def _show_browse(
     await state.update_data(
         coll_query=q,
         coll_page=page,
+        coll_pages=pages,
         coll_ids=[e["bricklink_id"] for e in entries],
     )
 
@@ -121,11 +134,11 @@ async def _show_browse(
 async def cb_my_collection(call: types.CallbackQuery, state: FSMContext) -> None:
     if not await ensure_access(call, "my_collection"):
         return
-    await state.clear()
     await call.answer()
     await _show_collection_home(
         call.message,
         str(call.from_user.id),
+        state,
         edit=bool(call.message.text),
     )
 
@@ -135,10 +148,6 @@ async def cb_collection_browse(call: types.CallbackQuery, state: FSMContext) -> 
     if not await ensure_access(call, "my_collection"):
         return
     part = call.data.split(":", 1)[1]
-    if part == "noop":
-        await call.answer()
-        return
-
     page = int(part)
     await call.answer()
     records = await _load_records(str(call.from_user.id))
@@ -160,25 +169,22 @@ async def cb_collection_browse(call: types.CallbackQuery, state: FSMContext) -> 
     )
 
 
-@router.callback_query(F.data == "collection_browse_all")
-async def cb_collection_browse_all(call: types.CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(F.data == "collection_pages")
+async def cb_collection_pages(call: types.CallbackQuery, state: FSMContext) -> None:
     if not await ensure_access(call, "my_collection"):
         return
     await call.answer()
-    records = await _load_records(str(call.from_user.id))
-    if not records:
-        await call.message.answer(
-            "Коллекция пуста.",
-            reply_markup=await _main_kb(call.from_user.id),
-        )
+    data = await state.get_data()
+    pages = int(data.get("coll_pages") or 1)
+    current = int(data.get("coll_page", 0))
+    if pages <= 1:
         return
-    await _show_browse(
+    text = f"📄 <b>Страница {current + 1}</b> из {pages}\n\nВыберите номер:"
+    await safe_edit_or_answer(
         call.message,
-        state,
-        str(call.from_user.id),
-        query="",
-        page=0,
-        edit=bool(call.message.text),
+        text,
+        parse_mode="HTML",
+        reply_markup=collection_page_picker_kb(current, pages),
     )
 
 
@@ -204,9 +210,6 @@ async def cb_collection_list_legacy(call: types.CallbackQuery, state: FSMContext
     if not await ensure_access(call, "my_collection"):
         return
     part = call.data.split(":", 1)[1]
-    if part == "noop":
-        await call.answer()
-        return
     await call.answer()
     await _show_browse(
         call.message,
@@ -223,39 +226,28 @@ async def cb_collection_find(call: types.CallbackQuery, state: FSMContext) -> No
     if not await ensure_access(call, "my_collection"):
         return
     await call.answer()
-    await state.set_state(CollectionState.waiting_list_query)
+    await _enter_collection_search_mode(state)
     await call.message.answer(
-        "🔍 <b>Поиск в списке</b>\n\n"
-        "Введите артикул или слова из названия "
+        "🔍 Введите в чат артикул или слова из названия "
         "(например <code>sw0001</code> или <code>Clone</code>).",
         parse_mode="HTML",
-        reply_markup=prompt_kb(back="collection_browse:0"),
+        reply_markup=prompt_kb(back="my_collection"),
     )
 
 
 @router.message(CollectionState.waiting_list_query, F.text)
 async def on_collection_list_query(message: types.Message, state: FSMContext) -> None:
-    query = message.text.strip()
-    if not query:
-        await message.answer(
-            "Введите текст для поиска.",
-            reply_markup=prompt_kb(back="collection_browse:0"),
-        )
-        return
-    await _show_browse(
-        message,
-        state,
-        str(message.from_user.id),
-        query=query,
-        page=0,
-    )
+    """Совместимость со старым шагом «Поиск в списке»."""
+    await state.set_state(CollectionState.browsing)
+    await on_collection_browse_text(message, state)
 
 
 @router.message(CollectionState.browsing, F.text)
 async def on_collection_browse_text(message: types.Message, state: FSMContext) -> None:
-    text = message.text.strip().lower()
-    if not text:
+    raw = (message.text or "").strip()
+    if not raw or raw.startswith("/"):
         return
+    text = raw.lower()
 
     records = await _load_records(str(message.from_user.id))
     entries = filter_unique_figures(records, text)
@@ -264,7 +256,7 @@ async def on_collection_browse_text(message: types.Message, state: FSMContext) -
     if text in ids or len(entries) == 1:
         bid = text if text in ids else entries[0]["bricklink_id"]
         await state.set_state(CollectionState.browsing)
-        await send_figure_card(
+        await send_figure_card_with_loading(
             message.bot,
             message.chat.id,
             str(message.from_user.id),
@@ -289,7 +281,7 @@ async def cb_coll_pick(call: types.CallbackQuery, state: FSMContext) -> None:
     bid = call.data.split(":", 1)[1].lower()
     await call.answer()
     await state.set_state(CollectionState.browsing)
-    await send_figure_card(
+    await send_figure_card_with_loading(
         call.bot,
         call.message.chat.id,
         str(call.from_user.id),
@@ -378,51 +370,24 @@ async def cb_collection_tierlist(call: types.CallbackQuery) -> None:
             reply_markup=await _main_kb(call.from_user.id),
         )
 
-    status = await call.message.answer("⏳ Загружаю изображения и собираю коллаж…")
-    tmp_path = None
-    try:
-        raw = await StarWarsCollageGenerator.fetch_and_prepare_images_async(
-            records=df,
-            id_key="bricklink_id",
-            prefix_url=PREFIX_URL,
-            min_height=MIN_HEIGHT,
-            font_path="arial.ttf",
-            font_size=90,
-            max_connections=MAX_CONN,
-            timeout=15,
+    rows = df.to_dict(orient="records")
+    total = len(rows)
+    if total > COLLAGE_BATCH_SIZE:
+        await call.message.answer(
+            f"В коллекции <b>{total}</b> записей — отправлю коллаж "
+            f"частями по <b>{COLLAGE_BATCH_SIZE}</b> фигурок.",
+            parse_mode="HTML",
         )
-        if not raw:
-            await status.edit_text("Не удалось загрузить изображения.")
-            return
 
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
-            tmp_path = tf.name
-        await StarWarsCollageGenerator.create_collage_async(
-            images=raw,
-            output_path=tmp_path,
-            columns=COLS,
-            title="Моя коллекция",
-            font_path="arial.ttf",
-            font_size=90,
-        )
-        with open(tmp_path, "rb") as f:
-            doc = BufferedInputFile(f.read(), filename="collection.png")
-        await status.delete()
-        await call.bot.send_document(
-            chat_id=call.from_user.id,
-            document=doc,
-            caption=f"🖼 Коллаж из {len(df)} фигурок",
-            reply_markup=collection_menu_kb(),
-        )
-    except Exception:
-        logger.exception("collection tierlist")
-        await status.edit_text("Ошибка при сборке коллажа.")
-    finally:
-        if tmp_path:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+    await send_collage_batches(
+        call.message,
+        rows,
+        title="Моя коллекция",
+        telegram_id=user_id,
+        caption_label=f"{total} фиг.",
+        caption_prefix="🖼 Коллаж",
+        reply_markup=collection_menu_kb(),
+    )
 
 
 @router.callback_query(F.data == "collection_excel")

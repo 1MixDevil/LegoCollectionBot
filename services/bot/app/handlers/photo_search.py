@@ -8,18 +8,41 @@ from io import BytesIO
 import httpx
 from aiogram import F, Router, types
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.core.access import ensure_access, get_main_keyboard
-from app.keyboards.main import prompt_kb
 from app.services.brickognize import format_top_candidates, search_by_image_bytes
-from app.services.figure_display import send_figure_card
+from app.services.figure_display import send_figure_card_with_loading
+from app.services.menu import send_main_menu
 from app.states.figures import PhotoSearchState
-from app.utils.message import answer_callback
-
 logger = logging.getLogger(__name__)
 router = Router()
+
+PHOTO_SEARCH_HINT = (
+    "📷 <b>Поиск по фото</b>\n\n"
+    "Отправьте фото минифигурки (как изображение или .jpg/.png).\n"
+    "После результата можно сразу прислать следующий снимок.\n\n"
+    "<i>Выход — кнопка ниже.</i>"
+)
+
+PHOTO_SEARCH_CONTINUE = (
+    "Можете отправить <b>ещё одно фото</b> — поиск продолжится.\n"
+    "<i>Выход — «Выйти из поиска».</i>"
+)
+
+
+def photo_search_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="↩️ Выйти из поиска",
+                    callback_data="photo_search_exit",
+                )
+            ],
+        ]
+    )
 
 
 def _candidate_picker_kb(candidates: list[dict]) -> InlineKeyboardMarkup:
@@ -32,10 +55,26 @@ def _candidate_picker_kb(candidates: list[dict]) -> InlineKeyboardMarkup:
             text=f"{name} ({score:.0f}%)",
             callback_data=f"photo_pick:{bid}",
         )
-    builder.button(text="📷 Другой снимок", callback_data="photo_search")
-    builder.button(text="❌ Отмена", callback_data="cancel")
+    builder.button(text="↩️ Выйти из поиска", callback_data="photo_search_exit")
     builder.adjust(1)
     return builder.as_markup()
+
+
+async def _enter_photo_search(
+    target: types.Message,
+    state: FSMContext,
+    *,
+    edit: bool = False,
+) -> None:
+    await state.set_state(PhotoSearchState.waiting_photo)
+    kb = photo_search_kb()
+    if edit and target.text:
+        try:
+            await target.edit_text(PHOTO_SEARCH_HINT, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            await target.answer(PHOTO_SEARCH_HINT, parse_mode="HTML", reply_markup=kb)
+    else:
+        await target.answer(PHOTO_SEARCH_HINT, parse_mode="HTML", reply_markup=kb)
 
 
 async def _download_telegram_image(message: types.Message) -> tuple[bytes, str]:
@@ -56,26 +95,12 @@ async def _download_telegram_image(message: types.Message) -> tuple[bytes, str]:
     return buf.getvalue(), filename
 
 
-@router.callback_query(F.data == "photo_search")
-async def cb_photo_search_start(call: types.CallbackQuery, state: FSMContext) -> None:
-    if not await ensure_access(call, "photo_search"):
-        return
-    await state.set_state(PhotoSearchState.waiting_photo)
-    await answer_callback(
-        call,
-        "📷 <b>Поиск по фото</b>\n\n"
-        "Отправьте фото минифигурки (как изображение, не файлом — "
-        "или как .jpg/.png).\n"
-        "Я попробую определить артикул BrickLink.",
-        parse_mode="HTML",
-        reply_markup=prompt_kb(),
-    )
-
-
-@router.message(PhotoSearchState.waiting_photo, F.photo | F.document)
-async def on_photo_received(message: types.Message, state: FSMContext) -> None:
+async def _process_photo_search(
+    message: types.Message,
+    state: FSMContext,
+) -> None:
     telegram_id = str(message.from_user.id)
-    kb = await get_main_keyboard(telegram_id)
+    kb = photo_search_kb()
     status = await message.answer("🔎 Ищу на Brickognize…", reply_markup=kb)
 
     try:
@@ -85,7 +110,7 @@ async def on_photo_received(message: types.Message, state: FSMContext) -> None:
             text = "Отправьте изображение (фото или .jpg/.png)."
         else:
             text = "Пришлите фото минифигурки."
-        await status.edit_text(text, reply_markup=prompt_kb())
+        await status.edit_text(text, reply_markup=kb)
         return
 
     try:
@@ -97,10 +122,9 @@ async def on_photo_received(message: types.Message, state: FSMContext) -> None:
         logger.exception("Brickognize HTTP error")
         await status.edit_text(
             f"Сервис распознавания недоступен ({e.response.status_code}). "
-            "Попробуйте позже.",
+            "Попробуйте другой снимок.",
             reply_markup=kb,
         )
-        await state.clear()
         return
     except Exception:
         logger.exception("Brickognize error")
@@ -108,7 +132,6 @@ async def on_photo_received(message: types.Message, state: FSMContext) -> None:
             "Не удалось распознать фото. Попробуйте другой ракурс или освещение.",
             reply_markup=kb,
         )
-        await state.clear()
         return
 
     await status.delete()
@@ -117,14 +140,16 @@ async def on_photo_received(message: types.Message, state: FSMContext) -> None:
         await message.answer(
             "Ничего похожего на минифигурку не найдено.\n"
             "Попробуйте крупнее, на однотонном фоне.",
+            parse_mode="HTML",
             reply_markup=kb,
         )
-        await state.clear()
         return
+
+    await state.set_state(PhotoSearchState.waiting_photo)
 
     if len(candidates) == 1 or (candidates[0].get("score") or 0) >= 0.85:
         best = candidates[0]
-        await send_figure_card(
+        await send_figure_card_with_loading(
             message.bot,
             message.chat.id,
             telegram_id,
@@ -133,36 +158,64 @@ async def on_photo_received(message: types.Message, state: FSMContext) -> None:
             bricklink_url=best.get("bricklink_url"),
             recognition_score=best.get("score"),
         )
-        await state.clear()
+        await message.answer(PHOTO_SEARCH_CONTINUE, parse_mode="HTML", reply_markup=kb)
         return
 
+    await state.set_state(PhotoSearchState.waiting_photo)
     await message.answer(
         "Найдено несколько вариантов. Выберите подходящий:",
         reply_markup=_candidate_picker_kb(candidates),
     )
+
+
+@router.callback_query(F.data == "photo_search")
+async def cb_photo_search_start(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "photo_search"):
+        return
+    await call.answer()
+    await _enter_photo_search(call.message, state, edit=bool(call.message.text))
+
+
+@router.callback_query(F.data == "photo_search_exit")
+async def cb_photo_search_exit(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "photo_search"):
+        return
     await state.clear()
+    await call.answer("Выход из поиска по фото")
+    await send_main_menu(call.message, str(call.from_user.id))
+
+
+@router.message(PhotoSearchState.waiting_photo, F.photo | F.document)
+async def on_photo_received(message: types.Message, state: FSMContext) -> None:
+    await _process_photo_search(message, state)
 
 
 @router.message(PhotoSearchState.waiting_photo)
 async def on_photo_invalid(message: types.Message) -> None:
+    if message.text and message.text.strip().startswith("/"):
+        return
     await message.answer(
-        "Нужно фото минифигурки. Отправьте снимок или нажмите «Отмена».",
-        reply_markup=prompt_kb(),
+        "Нужно фото минифигурки. Отправьте снимок или нажмите «Выйти из поиска».",
+        reply_markup=photo_search_kb(),
     )
 
 
 @router.callback_query(F.data.startswith("photo_pick:"))
-async def cb_photo_pick(call: types.CallbackQuery) -> None:
+async def cb_photo_pick(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "photo_search"):
+        return
     await call.answer()
     bricklink_id = call.data.split(":", 1)[1].lower()
     telegram_id = str(call.from_user.id)
     try:
-        await call.message.edit_text("Загружаю карточку…")
+        await call.message.edit_text("⏳ Открываю карточку…")
     except Exception:
         pass
-    await send_figure_card(
+    await send_figure_card_with_loading(
         call.bot,
         call.message.chat.id,
         telegram_id,
         bricklink_id,
     )
+    await state.set_state(PhotoSearchState.waiting_photo)
+    await call.message.answer(PHOTO_SEARCH_CONTINUE, parse_mode="HTML", reply_markup=photo_search_kb())

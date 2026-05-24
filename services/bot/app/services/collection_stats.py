@@ -90,7 +90,10 @@ def build_collection_summary(records: list[Any]) -> str:
     if with_sale_date:
         lines.append(f"📅 С датой продажи: <b>{with_sale_date}</b>")
 
-    lines.append("\n<i>Выберите действие ниже.</i>")
+    lines.append(
+        "\n<i>Сразу введите артикул или название для поиска — "
+        "или выберите кнопку ниже.</i>"
+    )
     return "\n".join(lines)
 
 
