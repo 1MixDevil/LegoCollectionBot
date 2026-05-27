@@ -218,4 +218,23 @@ async def cb_photo_pick(call: types.CallbackQuery, state: FSMContext) -> None:
         bricklink_id,
     )
     await state.set_state(PhotoSearchState.waiting_photo)
-    await call.message.answer(PHOTO_SEARCH_CONTINUE, parse_mode="HTML", reply_markup=photo_search_kb())
+    await call.message.answer(
+        PHOTO_SEARCH_CONTINUE, parse_mode="HTML", reply_markup=photo_search_kb()
+    )
+
+
+@router.message(F.photo | F.document)
+async def on_any_photo_auto_search(
+    message: types.Message,
+    state: FSMContext,
+) -> None:
+    """Любое фото в чате → поиск, если не в режиме поиска по фото уже."""
+    if await state.get_state() == PhotoSearchState.waiting_photo.state:
+        return
+    if message.document:
+        mime = message.document.mime_type or ""
+        if not mime.startswith("image/"):
+            return
+    if not await ensure_access(message, "photo_search"):
+        return
+    await _process_photo_search(message, state)

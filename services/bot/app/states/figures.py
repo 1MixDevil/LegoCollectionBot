@@ -32,6 +32,7 @@ class CreateTierList(StatesGroup):
     waiting_name_list = State()
     waiting_mode = State()
     waiting_serials = State()
+    waiting_mark_owned = State()
 
 
 class AdminPanelState(StatesGroup):

@@ -1,28 +1,41 @@
-import re
-
 from aiogram import Bot, F, Router, types
 from aiogram.fsm.context import FSMContext
+from aiogram.types import InlineKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from httpx import HTTPStatusError
 
 from app.api.collection import (
     add_figure_to_user,
     delete_figure_from_user,
     fetch_similar_serials,
+    search_figures_by_keyword,
 )
 from app.core.access import ensure_access, get_main_keyboard
 from app.core.config import MAX_SERIALS_PER_REQUEST
 from app.keyboards.main import make_suggestions_kb, nav_kb, prompt_kb
 from app.services.figure_display import send_figure_card
 from app.states.figures import InfoFigures
+from app.utils.serial_parse import parse_serial_list
 
 router = Router()
 
 FIGURE_CARD_PROMPT = (
     "ℹ️ <b>Карточка фигурки</b>\n\n"
-    "Введите артикул BrickLink (например <code>sw0001a</code>) — "
-    "фото, цены BrickLink и ваши записи в коллекции.\n\n"
-    "<i>Это не поиск по фото и не поиск внутри «Моя коллекция».</i>"
+    "Введите артикул BrickLink (например <code>sw0001a</code>) "
+    "или название целиком — фото, цены и записи в коллекции.\n\n"
+    "<i>Несколько артикулов — только через запятую: "
+    "<code>sw0001a, sw0002</code>. По фото — просто пришлите снимок в чат.</i>"
 )
+
+
+def _keyword_picker_kb(rows: list[dict]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for row in rows[:8]:
+        bid = row["bricklink_id"]
+        name = (row.get("name") or bid)[:40]
+        builder.button(text=f"{bid} — {name}", callback_data=f"info_pick:{bid}")
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 async def _start_figure_card(message: types.Message, state: FSMContext) -> None:
@@ -53,19 +66,71 @@ async def cb_info_legacy(call: types.CallbackQuery, state: FSMContext) -> None:
 async def get_info_figure(message: types.Message, state: FSMContext) -> None:
     text = message.text.strip()
     telegram_id = str(message.from_user.id)
-    serials = [s.strip() for s in re.split(r"[,; ]", text) if s.strip()]
+    serials = parse_serial_list(text)
 
-    if len(serials) > MAX_SERIALS_PER_REQUEST:
-        await message.answer(
-            f"❗️ Не более {MAX_SERIALS_PER_REQUEST} артикулов за раз.",
-            reply_markup=nav_kb(),
-        )
+    if serials is not None:
+        if len(serials) > MAX_SERIALS_PER_REQUEST:
+            await message.answer(
+                f"❗️ Не более {MAX_SERIALS_PER_REQUEST} артикулов за раз.",
+                reply_markup=nav_kb(),
+            )
+            return
+        await state.clear()
+        main_kb = await get_main_keyboard(telegram_id)
+        for serial in serials:
+            await handle_serial(
+                serial, message.bot, message.chat.id, telegram_id, main_kb
+            )
         return
 
     await state.clear()
     main_kb = await get_main_keyboard(telegram_id)
-    for serial in serials:
-        await handle_serial(serial, message.bot, message.chat.id, telegram_id, main_kb)
+
+    try:
+        found = await search_figures_by_keyword(text, limit=10)
+    except HTTPStatusError:
+        await message.answer(
+            "Ошибка поиска в каталоге. Попробуйте артикул BrickLink.",
+            reply_markup=nav_kb(),
+        )
+        return
+    except Exception:
+        await message.answer(
+            "Не удалось выполнить поиск. Введите артикул, например <code>sw0001a</code>.",
+            parse_mode="HTML",
+            reply_markup=nav_kb(),
+        )
+        return
+
+    if len(found) == 1:
+        await handle_serial(
+            found[0]["bricklink_id"],
+            message.bot,
+            message.chat.id,
+            telegram_id,
+            main_kb,
+        )
+        return
+
+    if len(found) > 1:
+        await message.answer(
+            f"По запросу «<i>{text}</i>» найдено <b>{len(found)}</b> вариантов. Выберите:",
+            parse_mode="HTML",
+            reply_markup=_keyword_picker_kb(found),
+        )
+        return
+
+    await handle_serial(text.lower(), message.bot, message.chat.id, telegram_id, main_kb)
+
+
+@router.callback_query(lambda cb: cb.data and cb.data.startswith("info_pick:"))
+async def cb_info_pick(call: types.CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    serial = call.data.split(":", 1)[1].lower()
+    await state.clear()
+    telegram_id = str(call.from_user.id)
+    main_kb = await get_main_keyboard(telegram_id)
+    await handle_serial(serial, call.bot, call.message.chat.id, telegram_id, main_kb)
 
 
 @router.callback_query(lambda cb: cb.data and cb.data.startswith("select_similar:"))

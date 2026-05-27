@@ -59,7 +59,30 @@ class StarWarsCollageGenerator:
         return ImageFont.load_default()
 
     @staticmethod
-    def _prepare_image_from_bytes(content: bytes, id_val: str, min_height: int, id_font):
+    def _draw_owned_mark(draw: ImageDraw.ImageDraw, width: int, height: int, pad_top: int) -> None:
+        """Красный крестик — фигурка уже в коллекции пользователя."""
+        margin = max(16, width // 25)
+        y0 = pad_top + margin
+        y1 = height - margin
+        x0, x1 = margin, width - margin
+        stroke = max(10, width // 28)
+        red = (220, 25, 25)
+        dark = (120, 10, 10)
+        for line in (
+            [(x0, y0), (x1, y1)],
+            [(x0, y1), (x1, y0)],
+        ):
+            draw.line(line, fill=dark, width=stroke + 4)
+            draw.line(line, fill=red, width=stroke)
+
+    @staticmethod
+    def _prepare_image_from_bytes(
+        content: bytes,
+        id_val: str,
+        min_height: int,
+        id_font,
+        owned_ids: frozenset[str] | None = None,
+    ):
         """
         CPU-bound sync helper to open/process image and draw text.
         Will be run in a thread via asyncio.to_thread.
@@ -81,6 +104,10 @@ class StarWarsCollageGenerator:
 
             draw = ImageDraw.Draw(canvas)
             draw.text((10, 10), id_val, font=id_font, fill='black')
+            if owned_ids and id_val.lower() in owned_ids:
+                StarWarsCollageGenerator._draw_owned_mark(
+                    draw, canvas.width, canvas.height, pad_top
+                )
 
             return (canvas, id_font)
         except Exception as e:
@@ -98,7 +125,8 @@ class StarWarsCollageGenerator:
         font_size: int = 90,
         user_agent: str = 'Mozilla/5.0',
         max_connections: int = 10,
-        timeout: int = 15
+        timeout: int = 15,
+        owned_ids: frozenset[str] | None = None,
     ) -> list:
         """
         Async: скачивает изображения параллельно (с ограниченной конкуренцией),
@@ -130,9 +158,23 @@ class StarWarsCollageGenerator:
                         r.raise_for_status()
                         content = r.content
                 # process in thread
-                prepared = await asyncio.to_thread(cls._prepare_image_from_bytes, content, id_val, min_height, id_font)
+                prepared = await asyncio.to_thread(
+                    cls._prepare_image_from_bytes,
+                    content,
+                    id_val,
+                    min_height,
+                    id_font,
+                    owned_ids,
+                )
                 if prepared:
-                    logger.debug(f"Prepared image for ID {id_val}")
+                    marked = bool(
+                        owned_ids and id_val.lower() in owned_ids
+                    )
+                    logger.debug(
+                        "Prepared image for ID %s (owned_mark=%s)",
+                        id_val,
+                        marked,
+                    )
                     return prepared
                 else:
                     logger.warning(f"Processing failed for {id_val}")

@@ -1,11 +1,15 @@
 import logging
 import os
-import re
 
 from aiogram import Router, types
 from aiogram.fsm.context import FSMContext
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.api.collection import fetch_all_catalog_serials, search_figures_by_keyword
+from app.api.collection import (
+    fetch_all_catalog_serials,
+    list_user_figures,
+    search_figures_by_keyword,
+)
 from app.core.access import ensure_access, get_main_keyboard, get_user_role
 from app.core.config import MAX_SERIALS_PER_REQUEST
 from app.core.permissions import can_access
@@ -16,16 +20,31 @@ from app.services.collage_delivery import (
     send_collage_batches,
 )
 from app.states.figures import CreateTierList
+from app.utils.serial_parse import parse_serial_list
 
 logger = logging.getLogger(__name__)
 router = Router()
 TIERLIST_KEYWORD_MAX = int(os.getenv("TIERLIST_KEYWORD_MAX", "500"))
 
-# Артикул BrickLink: sw0001a, lor129, hp0023
-SERIAL_RE = re.compile(r"^[a-z][a-z0-9]*\d+[a-z]?$", re.IGNORECASE)
-
-# Вся серия (без __ — Telegram ломает подчёркивания в Markdown)
 SERIES_COMMAND = "series"
+
+
+def tierlist_mark_owned_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Да, красным крестиком",
+                    callback_data="tierlist_mark_owned:yes",
+                ),
+                InlineKeyboardButton(
+                    text="❌ Нет",
+                    callback_data="tierlist_mark_owned:no",
+                ),
+            ],
+            [InlineKeyboardButton(text="↩️ Отмена", callback_data="cancel")],
+        ]
+    )
 
 
 def parse_series_prefix(text: str) -> str | None:
@@ -51,14 +70,9 @@ def parse_tierlist_input(text: str) -> tuple[str, object] | None:
     if series_prefix is not None:
         return ("all", series_prefix)
 
-    if re.search(r"[,;]", text):
-        tokens = [t.strip() for t in re.split(r"[,;]+", text) if t.strip()]
-        if tokens and all(SERIAL_RE.match(t) for t in tokens):
-            return ("serials", tokens)
-        return ("keyword", re.sub(r"[,;]+", " ", text).strip())
-
-    if SERIAL_RE.match(text):
-        return ("serials", [text])
+    serials = parse_serial_list(text)
+    if serials is not None:
+        return ("serials", serials)
 
     return ("keyword", text)
 
@@ -86,17 +100,107 @@ MODE_HINTS = {
 
 
 def parse_serials_only(text: str) -> tuple[str, list[str]] | None:
-    text = text.strip()
-    if not text:
-        return None
-    if re.search(r"[,;]", text):
-        tokens = [t.strip() for t in re.split(r"[,;]+", text) if t.strip()]
-        if tokens and all(SERIAL_RE.match(t) for t in tokens):
-            return ("serials", [t.lower() for t in tokens])
-        return None
-    if SERIAL_RE.match(text):
-        return ("serials", [text.lower()])
+    serials = parse_serial_list(text)
+    if serials is not None:
+        return ("serials", serials)
     return None
+
+
+async def _owned_ids(telegram_id: str, mark_owned: bool) -> frozenset[str] | None:
+    if not mark_owned:
+        return None
+    try:
+        figures = await list_user_figures(telegram_id)
+        owned = frozenset(
+            (f.get("bricklink_id") or "").lower()
+            for f in figures
+            if f.get("bricklink_id")
+        )
+        logger.info(
+            "Tierlist owned marks: %s ids in collection for telegram %s",
+            len(owned),
+            telegram_id,
+        )
+        return owned
+    except Exception:
+        logger.exception("load collection for tierlist marks")
+        return frozenset()
+
+
+async def _ask_mark_owned(
+    message: types.Message,
+    state: FSMContext,
+    records: list[dict],
+    caption_label: str,
+) -> None:
+    await state.update_data(
+        tierlist_pending={
+            "records": records,
+            "caption_label": caption_label,
+        }
+    )
+    await message.answer(
+        "Помечать фигурки, которые уже есть в <b>вашей коллекции</b>, "
+        "красным крестиком на коллаже?",
+        parse_mode="HTML",
+        reply_markup=tierlist_mark_owned_kb(),
+    )
+    await state.set_state(CreateTierList.waiting_mark_owned)
+
+
+async def _deliver_tierlist(
+    message: types.Message,
+    state: FSMContext,
+    *,
+    mark_owned: bool,
+    telegram_id: str,
+) -> None:
+    data = await state.get_data()
+    pending = data.get("tierlist_pending") or {}
+    records = pending.get("records") or []
+    caption_label = pending.get("caption_label") or ""
+    title = data.get("title") or ""
+    kb = await get_main_keyboard(telegram_id)
+    owned = await _owned_ids(telegram_id, mark_owned)
+
+    if len(records) <= BATCH_SIZE:
+        await generate_and_send_collage(
+            records,
+            telegram_id,
+            title,
+            message,
+            caption_label,
+            caption_prefix="Тир-лист",
+            reply_markup=kb,
+            owned_ids=owned,
+        )
+    else:
+        await send_collage_batches(
+            message,
+            records,
+            title=title,
+            telegram_id=telegram_id,
+            caption_label=caption_label,
+            caption_prefix="Тир-лист",
+            reply_markup=kb,
+            owned_ids=owned,
+        )
+    await state.clear()
+
+
+@router.callback_query(lambda cb: cb.data and cb.data.startswith("tierlist_mark_owned:"))
+async def cb_tierlist_mark_owned(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "tierlist"):
+        return
+    await call.answer()
+    mark = call.data.endswith(":yes")
+    # call.message.from_user — бот; коллекцию смотрим у нажавшего кнопку
+    await _deliver_tierlist(
+        call.message,
+        state,
+        mark_owned=mark,
+        telegram_id=str(call.from_user.id),
+    )
 
 
 @router.callback_query(lambda cb: cb.data == "create_tierlist")
@@ -219,28 +323,29 @@ async def on_serials_entered(message: types.Message, state: FSMContext):
                 reply_markup=nav_kb(),
             )
             return
+        records = [{"bricklink_id": s} for s in serials]
+        await message.answer("Готово. Уточним оформление коллажа…")
+        await _ask_mark_owned(message, state, records, caption_label="")
+        return
 
     if mode == "all":
-        await _handle_all_mode(message, str(payload), title, telegram_id)
-    elif mode == "keyword":
-        await _handle_keyword_mode(message, str(payload), title)
-    else:
-        await _handle_serials_mode(message, list(payload), title, telegram_id)
+        await _prepare_all_mode(message, state, str(payload), title, telegram_id)
+        return
+    if mode == "keyword":
+        await _prepare_keyword_mode(message, state, str(payload), title)
+        return
 
-    await state.clear()
-
-
-async def _main_kb(telegram_id: str):
-    return await get_main_keyboard(telegram_id)
+    await message.answer("Неизвестный режим.", reply_markup=nav_kb())
 
 
-async def _handle_keyword_mode(
+async def _prepare_keyword_mode(
     message: types.Message,
+    state: FSMContext,
     keyword: str,
     title: str,
 ) -> None:
     telegram_id = str(message.from_user.id)
-    kb = await _main_kb(telegram_id)
+    kb = await get_main_keyboard(telegram_id)
     await message.answer(
         f"🔎 Ищу в каталоге: <i>{keyword}</i>…",
         parse_mode="HTML",
@@ -270,54 +375,17 @@ async def _handle_keyword_mode(
         for row in found
     ]
     await message.answer(
-        f"Найдено <b>{len(records)}</b> фигурок. Собираю коллаж…",
+        f"Найдено <b>{len(records)}</b> фигурок.",
         parse_mode="HTML",
     )
-    kb = await _main_kb(telegram_id)
-    await send_collage_batches(
-        message,
-        records,
-        title=title,
-        telegram_id=telegram_id,
-        caption_label=f"поиск: {keyword}",
-        caption_prefix="Тир-лист",
-        reply_markup=kb,
+    await _ask_mark_owned(
+        message, state, records, caption_label=f"поиск: {keyword}"
     )
 
 
-async def _handle_serials_mode(
+async def _prepare_all_mode(
     message: types.Message,
-    serials: list[str],
-    title: str,
-    telegram_id: str,
-) -> None:
-    await message.answer("Генерируем тир-лист…")
-    records = [{"bricklink_id": s} for s in serials]
-    kb = await _main_kb(telegram_id)
-    if len(records) <= BATCH_SIZE:
-        await generate_and_send_collage(
-            records,
-            telegram_id,
-            title,
-            message,
-            caption_extra="",
-            caption_prefix="Тир-лист",
-            reply_markup=kb,
-        )
-    else:
-        await send_collage_batches(
-            message,
-            records,
-            title=title,
-            telegram_id=telegram_id,
-            caption_label="",
-            caption_prefix="Тир-лист",
-            reply_markup=kb,
-        )
-
-
-async def _handle_all_mode(
-    message: types.Message,
+    state: FSMContext,
     prefix: str,
     title: str,
     telegram_id: str,
@@ -326,7 +394,7 @@ async def _handle_all_mode(
         f"Загружаю все <code>{prefix}</code> из каталога…",
         parse_mode="HTML",
     )
-    kb = await _main_kb(telegram_id)
+    kb = await get_main_keyboard(telegram_id)
     try:
         serials = await fetch_all_catalog_serials(prefix=prefix)
     except Exception:
@@ -345,13 +413,6 @@ async def _handle_all_mode(
         return
 
     records = [{"bricklink_id": s} for s in serials]
-    kb = await _main_kb(telegram_id)
-    await send_collage_batches(
-        message,
-        records,
-        title=title,
-        telegram_id=telegram_id,
-        caption_label=f"серия {prefix}",
-        caption_prefix="Тир-лист",
-        reply_markup=kb,
+    await _ask_mark_owned(
+        message, state, records, caption_label=f"серия {prefix}"
     )

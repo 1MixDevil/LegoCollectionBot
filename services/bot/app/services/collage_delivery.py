@@ -56,6 +56,8 @@ async def build_collage_file(
     records: list[dict],
     telegram_id: str,
     title: str,
+    *,
+    owned_ids: frozenset[str] | None = None,
 ) -> tuple[str, str] | None:
     images = await StarWarsCollageGenerator.fetch_and_prepare_images_async(
         records=records,
@@ -65,6 +67,7 @@ async def build_collage_file(
         font_path="arial.ttf",
         font_size=90,
         max_connections=int(os.getenv("CONCURRENT_BATCHES", "5")),
+        owned_ids=owned_ids,
     )
     if not images:
         return None
@@ -127,8 +130,11 @@ async def generate_and_send_collage(
     *,
     caption_prefix: str = "Тир-лист",
     reply_markup: InlineKeyboardMarkup | None = None,
+    owned_ids: frozenset[str] | None = None,
 ) -> bool:
-    built = await build_collage_file(records, telegram_id, title)
+    built = await build_collage_file(
+        records, telegram_id, title, owned_ids=owned_ids
+    )
     if not built:
         await message.answer(
             f"Не удалось загрузить изображения"
@@ -190,6 +196,7 @@ async def send_collage_batches(
     caption_label: str = "",
     caption_prefix: str = "Коллаж",
     reply_markup: InlineKeyboardMarkup | None = None,
+    owned_ids: frozenset[str] | None = None,
 ) -> None:
     if not records:
         return
@@ -207,6 +214,7 @@ async def send_collage_batches(
             caption_label,
             caption_prefix=caption_prefix,
             reply_markup=reply_markup,
+            owned_ids=owned_ids,
         )
         return
 
@@ -226,7 +234,9 @@ async def send_collage_batches(
             f"⏳ Часть {batch_no}/{total_batches}: загрузка изображений…",
         )
 
-        built = await build_collage_file(batch, telegram_id, batch_title)
+        built = await build_collage_file(
+            batch, telegram_id, batch_title, owned_ids=owned_ids
+        )
         if not built:
             await message.answer(
                 f"⚠️ Часть {batch_no}/{total_batches}: не удалось собрать коллаж.",
