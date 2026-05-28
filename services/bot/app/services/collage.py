@@ -1,4 +1,4 @@
-"""Сборка коллажей: потоковая склейка по рядам (низкое потребление RAM)."""
+"""Сборка коллажей: единая сетка columns×rows (ровный прямоугольник)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 COLLAGE_JPEG_QUALITY = int(os.getenv("COLLAGE_JPEG_QUALITY", "82"))
 COLLAGE_PNG_COMPRESS = int(os.getenv("COLLAGE_PNG_COMPRESS", "6"))
-COLLAGE_CELL_PAD = int(os.getenv("COLLAGE_CELL_PAD", "80"))
+COLLAGE_CELL_PAD = int(os.getenv("COLLAGE_CELL_PAD", "120"))
 # Макс. сторона итогового коллажа (px) — защита от гигантских bitmap в RAM
 COLLAGE_MAX_DIMENSION = int(os.getenv("COLLAGE_MAX_DIMENSION", "10000"))
 
@@ -139,106 +139,34 @@ class StarWarsCollageGenerator:
             logger.debug("prepare image failed for %s", id_val, exc_info=True)
             return None
 
-    @staticmethod
-    def _make_row_strip(cells: list[Image.Image], columns: int) -> Image.Image | None:
-        if not cells:
-            return None
-        w = max(im.width for im in cells)
-        h = max(im.height for im in cells)
-        strip = Image.new("RGB", (w * columns, h), "white")
-        for i, im in enumerate(cells):
-            y_off = (h - im.height) // 2
-            strip.paste(im, (i * w, y_off))
-            im.close()
-        return strip
-
-    @staticmethod
-    def _title_padding(title: str | None, font_path: str, font_size: int) -> tuple[int, object | None, object | None]:
-        if not title:
-            return 0, None, None
-        title_font = StarWarsCollageGenerator.load_font(font_path, int(font_size * 1.5))
-        dummy = Image.new("RGB", (1, 1))
-        draw = ImageDraw.Draw(dummy)
-        bbox = draw.textbbox((0, 0), title, font=title_font)
-        dummy.close()
-        text_height = bbox[3] - bbox[1]
-        return text_height + 80, title_font, bbox
-
-    @staticmethod
-    def _append_row(
-        collage: Image.Image | None,
-        row_strip: Image.Image,
-        *,
-        columns: int,
-        title: str | None,
-        title_padding: int,
-        title_font,
-        title_bbox,
-        is_first: bool,
-    ) -> Image.Image:
-        if collage is None:
-            width = max(row_strip.width, columns * 100)
-            height = title_padding + row_strip.height
-            collage = Image.new("RGB", (width, height), "white")
-            if title and title_font and title_bbox:
-                draw = ImageDraw.Draw(collage)
-                x = (collage.width - (title_bbox[2] - title_bbox[0])) // 2
-                draw.text((x, 10), title, font=title_font, fill="black")
-            collage.paste(row_strip, (0, title_padding))
-            row_strip.close()
-            return collage
-
-        new_w = max(collage.width, row_strip.width)
-        new_h = collage.height + row_strip.height
-        merged = Image.new("RGB", (new_w, new_h), "white")
-        merged.paste(collage, (0, 0))
-        merged.paste(row_strip, (0, collage.height))
-        collage.close()
-        row_strip.close()
-        return merged
-
     @classmethod
-    async def build_collage_to_file(
+    async def fetch_and_prepare_images_async(
         cls,
-        records: list,
-        output_path: str,
-        *,
-        id_key: str = "bricklink_id",
+        records: pd.DataFrame | list,
+        id_key: str,
         prefix_url: str,
         min_height: int,
-        columns: int = 5,
-        title: str | None = None,
         font_path: str = "arial.ttf",
         font_size: int = 90,
-        max_connections: int = 3,
+        user_agent: str = "Mozilla/5.0",
+        max_connections: int = 10,
+        timeout: int = 15,
         owned_ids: frozenset[str] | None = None,
-    ) -> int:
-        """
-        Скачивает и склеивает по одному ряду (columns ячеек).
-        В RAM одновременно — не больше одного ряда + текущий коллаж.
-        """
+    ) -> list[Image.Image]:
+        """Скачивает и готовит ячейки (одинаковая сетка собирается в _create_collage_impl)."""
         if isinstance(records, pd.DataFrame):
             rows = list(records.to_dict(orient="records"))
         else:
             rows = list(records)
-        if not rows:
-            return 0
-
-        id_font = await asyncio.to_thread(cls.load_font, font_path, font_size)
-        title_padding, title_font, title_bbox = await asyncio.to_thread(
-            cls._title_padding, title, font_path, font_size
-        )
 
         prefix = prefix_url.rstrip("/")
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": user_agent}
+        id_font = cls.load_font(font_path, font_size)
         semaphore = asyncio.Semaphore(max_connections)
-        collage: Image.Image | None = None
-        placed = 0
-        row_index = 0
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
 
-            async def fetch_cell(row: dict) -> Image.Image | None:
+            async def fetch_one(row: dict) -> Image.Image | None:
                 id_val = str(row.get(id_key, "")).strip()
                 if not id_val:
                     return None
@@ -260,139 +188,135 @@ class StarWarsCollageGenerator:
                     logger.debug("fetch failed %s", url, exc_info=True)
                     return None
 
-            for start in range(0, len(rows), columns):
-                chunk = rows[start : start + columns]
-                tasks = [asyncio.create_task(fetch_cell(r)) for r in chunk]
-                cells = [c for c in await asyncio.gather(*tasks) if c is not None]
-                if not cells:
-                    continue
-
-                row_strip = await asyncio.to_thread(
-                    cls._make_row_strip, cells, columns
-                )
-                if row_strip is None:
-                    continue
-
-                is_first = row_index == 0
-                collage = await asyncio.to_thread(
-                    cls._append_row,
-                    collage,
-                    row_strip,
-                    columns=columns,
-                    title=title if is_first else None,
-                    title_padding=title_padding,
-                    title_font=title_font,
-                    title_bbox=title_bbox,
-                    is_first=is_first,
-                )
-                placed += len(cells)
-                row_index += 1
-                gc.collect()
-
-        if collage is None:
-            return 0
-
-        collage = await asyncio.to_thread(cls._downscale_if_needed, collage)
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        size = collage.size
-        saved_path = await asyncio.to_thread(
-            cls.save_collage_image, collage, output_path
-        )
-        collage.close()
-        gc.collect()
-        logger.info(
-            "Streaming collage saved: %s (%s cells, size %sx%s)",
-            saved_path,
-            placed,
-            size[0],
-            size[1],
-        )
-        return placed
-
-    # --- совместимость со старыми вызовами ---
-
-    @classmethod
-    async def fetch_and_prepare_images_async(cls, *args, **kwargs) -> list:
-        logger.warning("fetch_and_prepare_images_async is deprecated; use build_collage_to_file")
-        records = kwargs.get("records") or (args[0] if args else [])
-        min_height = kwargs.get("min_height", 900)
-        prefix_url = kwargs.get("prefix_url", "")
-        id_key = kwargs.get("id_key", "bricklink_id")
-        owned_ids = kwargs.get("owned_ids")
-        max_connections = kwargs.get("max_connections", 3)
-
-        rows = (
-            list(records.to_dict(orient="records"))
-            if isinstance(records, pd.DataFrame)
-            else list(records)
-        )
-        id_font = cls.load_font(kwargs.get("font_path", "arial.ttf"), kwargs.get("font_size", 90))
-        prefix = prefix_url.rstrip("/")
-        headers = {"User-Agent": "Mozilla/5.0"}
-        semaphore = asyncio.Semaphore(max_connections)
-        out = []
-
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            for row in rows[:5]:
-                id_val = str(row.get(id_key, ""))
-                url = f"{prefix}/{id_val}.png"
-                async with semaphore:
-                    r = await client.get(url, headers=headers)
-                    r.raise_for_status()
-                    im = await asyncio.to_thread(
-                        cls._prepare_image_from_bytes,
-                        r.content,
-                        id_val,
-                        min_height,
-                        id_font,
-                        owned_ids,
-                    )
-                    if im:
-                        out.append((im, id_font))
-        return out
-
-    @classmethod
-    async def create_collage_async(cls, images: list, output_path: str, **kwargs) -> None:
-        await asyncio.to_thread(
-            cls._create_collage_impl_legacy,
-            images,
-            output_path,
-            kwargs.get("columns", 5),
-            kwargs.get("title"),
-            kwargs.get("font_path", "arial.ttf"),
-            kwargs.get("font_size", 90),
-        )
+            tasks = [asyncio.create_task(fetch_one(r)) for r in rows]
+            done = await asyncio.gather(*tasks)
+        images = [im for im in done if im is not None]
+        logger.info("Prepared %s images out of %s records", len(images), len(rows))
+        return images
 
     @staticmethod
-    def _create_collage_impl_legacy(
-        images: list,
+    def _create_collage_impl(
+        images: list[Image.Image],
         output_path: str,
-        columns: int,
-        title: str | None,
-        font_path: str,
-        font_size: int,
+        columns: int = 5,
+        title: str | None = None,
+        font_path: str = "arial.ttf",
+        font_size: int = 90,
     ) -> None:
+        """Ровная сетка columns×rows: общие w×h для всех ячеек (как в оригинале)."""
         if not images:
+            logger.warning("No images to assemble into collage.")
             return
-        items = images
-        imgs = [it[0] if isinstance(it, tuple) else it for it in items]
-        w = max(im.width for im in imgs)
-        h = max(im.height for im in imgs)
-        rows_n = (len(imgs) + columns - 1) // columns
-        title_padding, title_font, bbox = StarWarsCollageGenerator._title_padding(
-            title, font_path, font_size
+
+        w = max(im.width for im in images)
+        h = max(im.height for im in images)
+        rows_n = (len(images) + columns - 1) // columns
+
+        title_padding = 0
+        title_font = None
+        bbox = None
+        if title:
+            title_font = StarWarsCollageGenerator.load_font(
+                font_path, int(font_size * 1.5)
+            )
+            dummy = Image.new("RGB", (1, 1))
+            draw = ImageDraw.Draw(dummy)
+            bbox = draw.textbbox((0, 0), title, font=title_font)
+            text_height = bbox[3] - bbox[1]
+            title_padding = text_height + 80
+            dummy.close()
+
+        collage = Image.new(
+            "RGB", (w * columns, h * rows_n + title_padding), "white"
         )
-        collage = Image.new("RGB", (w * columns, h * rows_n + title_padding), "white")
+
         if title and title_font and bbox:
             draw = ImageDraw.Draw(collage)
             x = (collage.width - (bbox[2] - bbox[0])) // 2
             draw.text((x, 10), title, font=title_font, fill="black")
-        for idx, im in enumerate(imgs):
-            collage.paste(im, ((idx % columns) * w, (idx // columns) * h + title_padding))
+
+        logger.info(
+            "Creating collage grid %sx%s, cell %sx%s, canvas %s",
+            rows_n,
+            columns,
+            w,
+            h,
+            collage.size,
+        )
+        for idx, im in enumerate(images):
+            x = (idx % columns) * w
+            y = (idx // columns) * h + title_padding
+            collage.paste(im, (x, y))
             im.close()
+
+        collage = StarWarsCollageGenerator._downscale_if_needed(collage)
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        StarWarsCollageGenerator.save_collage_image(collage, output_path)
+        saved = StarWarsCollageGenerator.save_collage_image(collage, output_path)
         collage.close()
+        logger.info("Collage saved to %s", saved)
+
+    @classmethod
+    async def build_collage_to_file(
+        cls,
+        records: list,
+        output_path: str,
+        *,
+        id_key: str = "bricklink_id",
+        prefix_url: str,
+        min_height: int,
+        columns: int = 5,
+        title: str | None = None,
+        font_path: str = "arial.ttf",
+        font_size: int = 90,
+        max_connections: int = 3,
+        owned_ids: frozenset[str] | None = None,
+    ) -> int:
+        """Скачивает ячейки и собирает ровную сетку (батч до ~50 в Celery — OK по RAM)."""
+        images = await cls.fetch_and_prepare_images_async(
+            records=records,
+            id_key=id_key,
+            prefix_url=prefix_url,
+            min_height=min_height,
+            font_path=font_path,
+            font_size=font_size,
+            max_connections=max_connections,
+            owned_ids=owned_ids,
+        )
+        if not images:
+            return 0
+
+        await asyncio.to_thread(
+            cls._create_collage_impl,
+            images,
+            output_path,
+            columns,
+            title,
+            font_path,
+            font_size,
+        )
+        gc.collect()
+        return len(images)
+
+    @classmethod
+    async def create_collage_async(
+        cls,
+        images: list,
+        output_path: str,
+        columns: int = 5,
+        title: str | None = None,
+        font_path: str = "arial.ttf",
+        font_size: int = 90,
+    ) -> None:
+        imgs = [it[0] if isinstance(it, tuple) else it for it in images]
+        await asyncio.to_thread(
+            cls._create_collage_impl,
+            imgs,
+            output_path,
+            columns,
+            title,
+            font_path,
+            font_size,
+        )
 
     @classmethod
     async def generate_from_list_async(
