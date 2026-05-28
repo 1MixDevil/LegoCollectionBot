@@ -73,12 +73,19 @@ services:
       AUTHORIZATION_PORT: "8000"
       COLLECTION_IP: collection-service
       COLLECTION_PORT: "8001"
+      COLLAGE_MAX_CONCURRENT: ${COLLAGE_MAX_CONCURRENT:-1}
+      COLLAGE_FORCE_BATCH_ABOVE: ${COLLAGE_FORCE_BATCH_ABOVE:-40}
+      COLLAGE_BATCH_SIZE: ${COLLAGE_BATCH_SIZE:-40}
+      COLL_MIN_HEIGHT: ${COLL_MIN_HEIGHT:-750}
+      CONCURRENT_BATCHES: ${CONCURRENT_BATCHES:-3}
     depends_on:
       - auth-service
       - collection-service
     env_file:
       - .env
     restart: unless-stopped
+    mem_limit: ${BOT_MEM_LIMIT:-768m}
+    memswap_limit: ${BOT_MEMSWAP_LIMIT:-768m}
 
 volumes:
   postgres_data:

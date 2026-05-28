@@ -16,9 +16,14 @@ from app.core.config import MAX_SERIALS_PER_REQUEST
 from app.core.permissions import can_access
 from app.keyboards.main import nav_kb, tierlist_mode_kb
 from app.services.collage_delivery import (
-    COLLAGE_BATCH_SIZE as BATCH_SIZE,
     generate_and_send_collage,
     send_collage_batches,
+)
+from app.services.collage_limits import (
+    COLLAGE_BATCH_SIZE,
+    cap_tierlist_records,
+    should_send_in_batches,
+    tierlist_max_figures,
 )
 from app.states.figures import CreateTierList
 from app.utils.serial_parse import parse_serial_list
@@ -173,7 +178,17 @@ async def _deliver_tierlist(
     kb = await get_main_keyboard(telegram_id)
     owned = await _owned_ids(telegram_id, mark_owned)
 
-    if len(records) <= BATCH_SIZE:
+    role = await get_user_role(telegram_id)
+    records, dropped = cap_tierlist_records(records, role)
+    if dropped > 0:
+        limit = tierlist_max_figures(role)
+        await message.answer(
+            f"⚠️ Tier‑лист ограничен <b>{limit}</b> фигурками для вашего уровня. "
+            f"В коллаж попали первые {limit} из списка.",
+            parse_mode="HTML",
+        )
+
+    if not should_send_in_batches(len(records)):
         await generate_and_send_collage(
             records,
             telegram_id,
@@ -301,7 +316,7 @@ async def cb_tierlist_mode(call: types.CallbackQuery, state: FSMContext):
     elif mode == "keyword":
         hint += (
             f"\n\nЛимит: до {TIERLIST_KEYWORD_MAX} "
-            f"(если больше {BATCH_SIZE} — несколько файлов)."
+            f"(если больше {COLLAGE_BATCH_SIZE} — несколько файлов)."
         )
     await call.message.answer(hint, parse_mode="HTML", reply_markup=nav_kb())
     await state.set_state(CreateTierList.waiting_serials)
