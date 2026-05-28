@@ -35,6 +35,28 @@ COLLAGE_IMAGE_FORMAT = os.getenv("COLLAGE_IMAGE_FORMAT", "jpeg").lower()
 COLLAGE_SEND_DELAY = float(os.getenv("COLLAGE_SEND_DELAY", "2.0"))
 
 
+def owned_stats_caption(
+    records: list[dict],
+    owned_ids: frozenset[str] | None,
+) -> str:
+    """Сводка по крестикам (только если коллаж с пометкой owned)."""
+    if owned_ids is None:
+        return ""
+    total = len(records)
+    if total == 0:
+        return ""
+    owned_count = sum(
+        1
+        for r in records
+        if (r.get("bricklink_id") or "").lower() in owned_ids
+    )
+    not_owned = total - owned_count
+    return (
+        f"\n\n❌ <b>В коллекции:</b> {owned_count} · "
+        f"<b>нет в коллекции:</b> {not_owned} (всего {total})"
+    )
+
+
 async def update_status_message(
     status: types.Message,
     text: str,
@@ -101,6 +123,7 @@ async def send_collage_file(
     caption: str,
     *,
     reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: str | None = None,
 ) -> None:
     if not os.path.isfile(file_path):
         raise FileNotFoundError(f"Collage file missing: {file_path}")
@@ -118,6 +141,7 @@ async def send_collage_file(
             doc,
             caption=caption,
             reply_markup=reply_markup,
+            parse_mode=parse_mode,
             request_timeout=timeout,
         )
 
@@ -150,6 +174,7 @@ async def generate_and_send_collage(
     caption = f"{caption_prefix} {title or ''} готов!".strip()
     if caption_extra:
         caption += f" ({caption_extra})"
+    caption += owned_stats_caption(records, owned_ids)
 
     try:
         await send_collage_file(
@@ -158,6 +183,7 @@ async def generate_and_send_collage(
             file_path,
             filename,
             caption,
+            parse_mode="HTML",
             reply_markup=reply_markup,
         )
         return True
@@ -260,12 +286,20 @@ async def send_collage_batches(
         caption = f"{caption_prefix} {batch_title}"
         if caption_label:
             caption += f" ({caption_label})"
+        caption += owned_stats_caption(batch, owned_ids)
         try:
             await update_status_message(
                 status,
                 f"⏳ Часть {batch_no}/{total_batches}: отправка файла…",
             )
-            await send_collage_file(bot, chat_id, file_path, filename, caption.strip())
+            await send_collage_file(
+                bot,
+                chat_id,
+                file_path,
+                filename,
+                caption.strip(),
+                parse_mode="HTML",
+            )
             sent += 1
             if batch_no < total_batches and COLLAGE_SEND_DELAY > 0:
                 await asyncio.sleep(COLLAGE_SEND_DELAY)

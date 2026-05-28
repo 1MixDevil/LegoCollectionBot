@@ -126,7 +126,7 @@ def collection_browse_kb(
 
 def collection_figure_kb(bricklink_id: str) -> InlineKeyboardMarkup:
     """Карточка из списка коллекции: действия + возврат к списку."""
-    base = make_info_kb(bricklink_id)
+    base = make_info_kb(bricklink_id, in_collection=True)
     rows = [list(row) for row in base.inline_keyboard]
     rows.insert(
         -1,

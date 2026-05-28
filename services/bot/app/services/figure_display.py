@@ -305,7 +305,8 @@ async def send_figure_card(
         collection_stats=stats,
         market=market,
     )
-    kb = reply_markup or make_info_kb(bricklink_id)
+    in_collection = bool(stats.get("count", 0))
+    kb = reply_markup or make_info_kb(bricklink_id, in_collection=in_collection)
     image_url = f"https://img.bricklink.com/ItemImage/MN/0/{bricklink_id}.png"
 
     try:

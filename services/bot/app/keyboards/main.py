@@ -315,45 +315,49 @@ def prompt_kb(back: str | None = None, skip: str | None = None) -> InlineKeyboar
 
 # === Существующие функции оставлены без изменений ===
 
-def make_info_kb(serial: str) -> InlineKeyboardMarkup:
+def make_info_kb(serial: str, *, in_collection: bool = False) -> InlineKeyboardMarkup:
     """
-    Возвращает inline‑клавиатуру для info‑команды
-    с кнопками: wishlist, buy, sell, add, delete, cancel
+    Клавиатура карточки фигурки.
+    «Продать» и «Удалить» — только если фигурка уже в коллекции пользователя.
     """
-    return InlineKeyboardMarkup(inline_keyboard=[
+    rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
                 text="Добавить в «Желаемое»",
-                callback_data=f"info_action:wishlist:{serial}"
+                callback_data=f"info_action:wishlist:{serial}",
             ),
             InlineKeyboardButton(
                 text="Купить",
-                callback_data=f"info_action:buy:{serial}"
+                callback_data=f"info_action:buy:{serial}",
             ),
         ],
-        [
-            InlineKeyboardButton(
-                text="Продать",
-                callback_data=f"info_action:sell:{serial}"
-            ),
-            InlineKeyboardButton(
-                text="Добавить в коллекцию",
-                callback_data=f"info_action:add:{serial}"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="Удалить из коллекции",
-                callback_data=f"info_action:delete:{serial}"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="❌ Отмена",
-                callback_data="cancel"
-            )
-        ]
-    ])
+    ]
+    if in_collection:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Продать",
+                    callback_data=f"info_action:sell:{serial}",
+                ),
+                InlineKeyboardButton(
+                    text="Удалить из коллекции",
+                    callback_data=f"info_action:delete:{serial}",
+                ),
+            ]
+        )
+    else:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Добавить в коллекцию",
+                    callback_data=f"info_action:add:{serial}",
+                ),
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def make_suggestions_kb(suggestions: list[dict]) -> InlineKeyboardMarkup:
     keyboard = []
