@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 COLLAGE_JPEG_QUALITY = int(os.getenv("COLLAGE_JPEG_QUALITY", "82"))
 COLLAGE_PNG_COMPRESS = int(os.getenv("COLLAGE_PNG_COMPRESS", "6"))
 COLLAGE_CELL_PAD = int(os.getenv("COLLAGE_CELL_PAD", "80"))
+# Макс. сторона итогового коллажа (px) — защита от гигантских bitmap в RAM
+COLLAGE_MAX_DIMENSION = int(os.getenv("COLLAGE_MAX_DIMENSION", "10000"))
 
 
 class StarWarsCollageGenerator:
@@ -25,14 +27,22 @@ class StarWarsCollageGenerator:
         path_lower = output_path.lower()
         if path_lower.endswith((".jpg", ".jpeg")):
             out = output_path.rsplit(".", 1)[0] + ".jpg"
-            rgb = collage.convert("RGB")
-            rgb.save(
-                out,
-                format="JPEG",
-                quality=COLLAGE_JPEG_QUALITY,
-                optimize=True,
-            )
-            rgb.close()
+            if collage.mode == "RGB":
+                collage.save(
+                    out,
+                    format="JPEG",
+                    quality=COLLAGE_JPEG_QUALITY,
+                    optimize=True,
+                )
+            else:
+                rgb = collage.convert("RGB")
+                rgb.save(
+                    out,
+                    format="JPEG",
+                    quality=COLLAGE_JPEG_QUALITY,
+                    optimize=True,
+                )
+                rgb.close()
             return out
         collage.save(
             output_path,
@@ -70,6 +80,19 @@ class StarWarsCollageGenerator:
             except Exception:
                 continue
         return ImageFont.load_default()
+
+    @staticmethod
+    def _downscale_if_needed(img: Image.Image) -> Image.Image:
+        w, h = img.size
+        longest = max(w, h)
+        if longest <= COLLAGE_MAX_DIMENSION:
+            return img
+        scale = COLLAGE_MAX_DIMENSION / longest
+        nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+        resized = img.resize((nw, nh), Image.Resampling.LANCZOS)
+        img.close()
+        logger.info("Collage downscaled %dx%d -> %dx%d", w, h, nw, nh)
+        return resized
 
     @staticmethod
     def _draw_owned_mark(
@@ -269,6 +292,7 @@ class StarWarsCollageGenerator:
         if collage is None:
             return 0
 
+        collage = await asyncio.to_thread(cls._downscale_if_needed, collage)
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         size = collage.size
         saved_path = await asyncio.to_thread(

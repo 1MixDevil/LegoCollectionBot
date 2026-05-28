@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters.command import Command
@@ -88,6 +89,9 @@ async def setup_bot_profile(bot: Bot) -> None:
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logger.info("Bot process start pid=%s", os.getpid())
 
     if not TG_TOKEN:
         raise RuntimeError("TG_TOKEN is not set")

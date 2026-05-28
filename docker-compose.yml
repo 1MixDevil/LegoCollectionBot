@@ -10,13 +10,28 @@ services:
       POSTGRES_PASSWORD: aml1
       POSTGRES_DB: lego_db
     ports:
-      - "15432:5432"
+      - "127.0.0.1:15432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aml1 -d lego_db"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    mem_limit: ${POSTGRES_MEM_LIMIT:-512m}
+    memswap_limit: ${POSTGRES_MEMSWAP_LIMIT:-512m}
+
+  redis:
+    container_name: redis
+    image: redis:7-alpine
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    mem_limit: ${REDIS_MEM_LIMIT:-192m}
+    memswap_limit: ${REDIS_MEMSWAP_LIMIT:-192m}
 
   auth-service:
     container_name: auth
@@ -24,7 +39,7 @@ services:
     volumes:
       - ./services/auth:/app
     ports:
-      - "${AUTHORIZATION_PORT:-8000}:8000"
+      - "127.0.0.1:${AUTHORIZATION_PORT:-8000}:8000"
     environment:
       DATABASE_URL: postgresql+psycopg2://aml1:aml1@db:5432/lego_db
       POSTGRES_HOST: db
@@ -38,6 +53,8 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    mem_limit: ${AUTH_MEM_LIMIT:-256m}
+    memswap_limit: ${AUTH_MEMSWAP_LIMIT:-256m}
 
   collection-service:
     container_name: collection
@@ -45,7 +62,7 @@ services:
     volumes:
       - ./services/collection:/app
     ports:
-      - "${COLLECTION_PORT:-8001}:8001"
+      - "127.0.0.1:${COLLECTION_PORT:-8001}:8001"
     environment:
       DATABASE_URL: postgresql+psycopg2://aml1:aml1@db:5432/lego_db
       POSTGRES_HOST: db
@@ -62,10 +79,13 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    mem_limit: ${COLLECTION_MEM_LIMIT:-256m}
+    memswap_limit: ${COLLECTION_MEMSWAP_LIMIT:-256m}
 
   bot-service:
     container_name: telegram-bot
     build: ./services/bot
+    command: ["python", "-m", "app.main"]
     volumes:
       - ./services/bot:/app
     environment:
@@ -73,19 +93,53 @@ services:
       AUTHORIZATION_PORT: "8000"
       COLLECTION_IP: collection-service
       COLLECTION_PORT: "8001"
-      COLLAGE_MAX_CONCURRENT: ${COLLAGE_MAX_CONCURRENT:-1}
-      COLLAGE_FORCE_BATCH_ABOVE: ${COLLAGE_FORCE_BATCH_ABOVE:-40}
-      COLLAGE_BATCH_SIZE: ${COLLAGE_BATCH_SIZE:-40}
-      COLL_MIN_HEIGHT: ${COLL_MIN_HEIGHT:-750}
-      CONCURRENT_BATCHES: ${CONCURRENT_BATCHES:-3}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
     depends_on:
-      - auth-service
-      - collection-service
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+      collection-service:
+        condition: service_started
     env_file:
       - .env
     restart: unless-stopped
-    mem_limit: ${BOT_MEM_LIMIT:-768m}
-    memswap_limit: ${BOT_MEMSWAP_LIMIT:-768m}
+    mem_limit: ${BOT_MEM_LIMIT:-384m}
+    memswap_limit: ${BOT_MEMSWAP_LIMIT:-384m}
+
+  celery-worker:
+    container_name: celery-worker
+    build: ./services/bot
+    command: >
+      celery -A app.celery_app worker
+      -Q collage
+      -c ${CELERY_WORKER_CONCURRENCY:-1}
+      --loglevel=info
+    volumes:
+      - ./services/bot:/app
+      - collage_tmp:/tmp
+    environment:
+      AUTHORIZATION_IP: auth-service
+      AUTHORIZATION_PORT: "8000"
+      COLLECTION_IP: collection-service
+      COLLECTION_PORT: "8001"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      TMP_DIR: /tmp
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+      collection-service:
+        condition: service_started
+    env_file:
+      - .env
+    restart: unless-stopped
+    mem_limit: ${CELERY_MEM_LIMIT:-1536m}
+    memswap_limit: ${CELERY_MEMSWAP_LIMIT:-1536m}
 
 volumes:
   postgres_data:
+  collage_tmp:
