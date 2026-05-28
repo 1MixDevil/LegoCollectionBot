@@ -8,7 +8,7 @@ import os
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 
 logger = logging.getLogger(__name__)
 
@@ -49,19 +49,38 @@ async def with_telegram_retry(
     raise last
 
 
+def is_stale_callback_error(exc: BaseException) -> bool:
+    if not isinstance(exc, TelegramBadRequest):
+        return False
+    msg = (getattr(exc, "message", None) or str(exc)).lower()
+    return (
+        "query is too old" in msg
+        or "query id is invalid" in msg
+        or "response timeout expired" in msg
+    )
+
+
 async def safe_callback_answer(
     call,
     text: str | None = None,
     *,
     show_alert: bool = False,
-) -> None:
+) -> bool:
+    """Ответ на callback. False — устаревшая кнопка или сеть."""
     try:
         await with_telegram_retry(
             lambda: call.answer(text, show_alert=show_alert),
             label="callback.answer",
         )
+        return True
     except TelegramNetworkError:
         logger.warning("callback.answer не доставлен (сеть)")
+        return False
+    except TelegramBadRequest as exc:
+        if is_stale_callback_error(exc):
+            logger.debug("stale callback ignored: %s", exc)
+            return False
+        raise
 
 
 async def safe_message_answer(message, *args, **kwargs):

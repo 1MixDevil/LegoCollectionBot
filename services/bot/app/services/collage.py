@@ -14,8 +14,34 @@ handler.setFormatter(formatter)
 logger.addHandler(handler)
 logger.setLevel(logging.DEBUG)
 
+COLLAGE_JPEG_QUALITY = int(os.getenv("COLLAGE_JPEG_QUALITY", "85"))
+COLLAGE_PNG_COMPRESS = int(os.getenv("COLLAGE_PNG_COMPRESS", "6"))
+COLLAGE_CELL_PAD = int(os.getenv("COLLAGE_CELL_PAD", "120"))
+
 
 class StarWarsCollageGenerator:
+    @staticmethod
+    def save_collage_image(collage: Image.Image, output_path: str) -> str:
+        """JPEG заметно легче PNG при сопоставимом виде для коллажей."""
+        path_lower = output_path.lower()
+        if path_lower.endswith((".jpg", ".jpeg")):
+            out = output_path.rsplit(".", 1)[0] + ".jpg"
+            rgb = collage.convert("RGB")
+            rgb.save(
+                out,
+                format="JPEG",
+                quality=COLLAGE_JPEG_QUALITY,
+                optimize=True,
+            )
+            return out
+        collage.save(
+            output_path,
+            format="PNG",
+            optimize=True,
+            compress_level=min(9, max(0, COLLAGE_PNG_COMPRESS)),
+        )
+        return output_path
+
     @staticmethod
     def filter_by_keyword(
         data: list | pd.DataFrame,
@@ -94,7 +120,7 @@ class StarWarsCollageGenerator:
             new_w = int(new_h * (img.width / img.height)) if img.height else new_h
             img = img.resize((new_w, new_h))
 
-            pad_top, pad_bottom = 150, 150
+            pad_top = pad_bottom = COLLAGE_CELL_PAD
             canvas = Image.new('RGB', (new_w, new_h + pad_top + pad_bottom), 'white')
             # paste preserving alpha
             if img.mode in ("RGBA", "LA"):
@@ -225,7 +251,8 @@ class StarWarsCollageGenerator:
             draw = ImageDraw.Draw(dummy)
             bbox = draw.textbbox((0, 0), title, font=title_font)
             text_height = bbox[3] - bbox[1]
-            title_padding = text_height + 20
+            # Запас под заголовок + отступ до первого ряда (ячейки с подписью сверху)
+            title_padding = text_height + 80
             logger.info(f"Adding title '{title}' with padding {title_padding}")
 
         collage = Image.new('RGB', (w * columns, h * rows + title_padding), 'white')
@@ -244,9 +271,9 @@ class StarWarsCollageGenerator:
             collage.paste(im, (x, y))
 
         # Ensure dir exists
-        os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
-        collage.save(output_path)
-        logger.info(f"Collage saved to {output_path}")
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        saved = StarWarsCollageGenerator.save_collage_image(collage, output_path)
+        logger.info(f"Collage saved to {saved}")
 
     @classmethod
     async def create_collage_async(

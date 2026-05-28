@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import re
+import uuid
 
 from aiogram import Bot, types
 from aiogram.exceptions import TelegramBadRequest, TelegramEntityTooLarge, TelegramNetworkError
@@ -29,7 +30,8 @@ PREFIX_URL = os.getenv(
     "COLL_PREFIX_URL", "https://img.bricklink.com/ItemImage/MN/0"
 )
 COLLAGE_COLUMNS = int(os.getenv("COLL_COLUMNS", "5"))
-COLLAGE_MIN_HEIGHT = int(os.getenv("COLL_MIN_HEIGHT", "1050"))
+COLLAGE_MIN_HEIGHT = int(os.getenv("COLL_MIN_HEIGHT", "900"))
+COLLAGE_IMAGE_FORMAT = os.getenv("COLLAGE_IMAGE_FORMAT", "jpeg").lower()
 COLLAGE_SEND_DELAY = float(os.getenv("COLLAGE_SEND_DELAY", "2.0"))
 
 
@@ -76,9 +78,9 @@ async def build_collage_file(
     base_name = f"collage_{telegram_id}"
     if safe_title:
         base_name += f"_{safe_title}"
-    base_name = re.sub(r"\s+", "_", base_name)[:200]
-    if not base_name.endswith(".png"):
-        base_name += ".png"
+    base_name = re.sub(r"\s+", "_", base_name)[:180]
+    ext = ".jpg" if COLLAGE_IMAGE_FORMAT == "jpeg" else ".png"
+    base_name = f"{base_name}_{uuid.uuid4().hex[:8]}{ext}"
 
     output_path = os.path.join(TMP_DIR, base_name)
     os.makedirs(TMP_DIR, exist_ok=True)
@@ -100,12 +102,13 @@ async def send_collage_file(
     *,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> None:
-    size = os.path.getsize(file_path)
-    if size > MAX_FILE_BYTES:
-        raise CollageFileTooLarge(size)
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"Collage file missing: {file_path}")
 
     with open(file_path, "rb") as f:
         payload = f.read()
+    if len(payload) > MAX_FILE_BYTES:
+        raise CollageFileTooLarge(len(payload))
     doc = BufferedInputFile(payload, filename=filename)
     timeout = int(TELEGRAM_DOCUMENT_TIMEOUT)
 
@@ -173,6 +176,14 @@ async def generate_and_send_collage(
             reply_markup=reply_markup,
         )
         return False
+    except FileNotFoundError:
+        logger.warning("collage file missing on send (duplicate request?)")
+        await message.answer(
+            "⚠️ Файл коллажа уже отправлен или устарел. "
+            "Не нажимайте кнопку повторно — создайте tier‑лист заново.",
+            reply_markup=reply_markup,
+        )
+        return False
     except Exception as e:
         logger.exception("send collage")
         await message.answer(
@@ -182,7 +193,8 @@ async def generate_and_send_collage(
         return False
     finally:
         try:
-            os.remove(file_path)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
         except OSError:
             pass
 
@@ -285,7 +297,8 @@ async def send_collage_batches(
                 pass
         finally:
             try:
-                os.remove(file_path)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
             except OSError:
                 pass
 

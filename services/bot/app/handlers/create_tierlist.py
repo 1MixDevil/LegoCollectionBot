@@ -2,6 +2,7 @@ import logging
 import os
 
 from aiogram import Router, types
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -21,12 +22,23 @@ from app.services.collage_delivery import (
 )
 from app.states.figures import CreateTierList
 from app.utils.serial_parse import parse_serial_list
+from app.utils.telegram_network import safe_callback_answer
 
 logger = logging.getLogger(__name__)
 router = Router()
 TIERLIST_KEYWORD_MAX = int(os.getenv("TIERLIST_KEYWORD_MAX", "500"))
 
 SERIES_COMMAND = "series"
+
+
+async def _notify_stale_button(call: types.CallbackQuery, text: str) -> None:
+    if not await safe_callback_answer(call, text, show_alert=True):
+        try:
+            await call.message.answer(
+                f"⚠️ {text}\n\nОткройте /menu и создайте tier‑лист заново.",
+            )
+        except Exception:
+            pass
 
 
 def tierlist_mark_owned_kb() -> InlineKeyboardMarkup:
@@ -150,16 +162,14 @@ async def _ask_mark_owned(
 
 async def _deliver_tierlist(
     message: types.Message,
-    state: FSMContext,
     *,
+    pending: dict,
+    title: str,
     mark_owned: bool,
     telegram_id: str,
 ) -> None:
-    data = await state.get_data()
-    pending = data.get("tierlist_pending") or {}
     records = pending.get("records") or []
     caption_label = pending.get("caption_label") or ""
-    title = data.get("title") or ""
     kb = await get_main_keyboard(telegram_id)
     owned = await _owned_ids(telegram_id, mark_owned)
 
@@ -185,21 +195,51 @@ async def _deliver_tierlist(
             reply_markup=kb,
             owned_ids=owned,
         )
-    await state.clear()
 
 
 @router.callback_query(lambda cb: cb.data and cb.data.startswith("tierlist_mark_owned:"))
 async def cb_tierlist_mark_owned(call: types.CallbackQuery, state: FSMContext) -> None:
     if not await ensure_access(call, "tierlist"):
         return
-    await call.answer()
+
+    if await state.get_state() != CreateTierList.waiting_mark_owned.state:
+        await _notify_stale_button(
+            call, "Коллаж уже собирается или кнопка устарела."
+        )
+        return
+
+    data = await state.get_data()
+    pending = data.get("tierlist_pending")
+    if not pending or not pending.get("records"):
+        await state.clear()
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+        await _notify_stale_button(call, "Создайте tier‑лист заново.")
+        return
+
+    title = data.get("title") or ""
     mark = call.data.endswith(":yes")
-    # call.message.from_user — бот; коллекцию смотрим у нажавшего кнопку
+    telegram_id = str(call.from_user.id)
+
+    await state.clear()
+    try:
+        await call.message.delete()
+    except TelegramBadRequest:
+        pass
+    except Exception:
+        logger.debug("Could not delete tierlist prompt message", exc_info=True)
+
+    if not await safe_callback_answer(call, "⏳ Собираю коллаж…"):
+        await _notify_stale_button(call, "Кнопка устарела.")
+        return
     await _deliver_tierlist(
         call.message,
-        state,
+        pending=pending,
+        title=title,
         mark_owned=mark,
-        telegram_id=str(call.from_user.id),
+        telegram_id=telegram_id,
     )
 
 
@@ -207,7 +247,9 @@ async def cb_tierlist_mark_owned(call: types.CallbackQuery, state: FSMContext) -
 async def cb_start_tierlist(call: types.CallbackQuery, state: FSMContext):
     if not await ensure_access(call, "tierlist"):
         return
-    await call.answer()
+    if not await safe_callback_answer(call):
+        await _notify_stale_button(call, "Это старое меню.")
+        return
     await call.message.answer(
         "Введите название вашего Tier List.\n"
         "Если не нужно — отправьте `null`.",
@@ -249,7 +291,9 @@ async def cb_tierlist_mode(call: types.CallbackQuery, state: FSMContext):
     feature = PARSE_MODE_FEATURE.get(mode)
     if not feature or not await ensure_access(call, feature):
         return
-    await call.answer()
+    if not await safe_callback_answer(call):
+        await _notify_stale_button(call, "Кнопка устарела.")
+        return
     await state.update_data(tierlist_mode=mode)
     hint = MODE_HINTS.get(mode, "")
     if mode == "serials":
