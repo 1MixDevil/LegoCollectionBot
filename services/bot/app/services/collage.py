@@ -113,6 +113,7 @@ class StarWarsCollageGenerator:
     def _prepare_image_from_bytes(
         content: bytes,
         id_val: str,
+        display_text: str,
         min_height: int,
         id_font,
         owned_ids: frozenset[str] | None = None,
@@ -129,7 +130,7 @@ class StarWarsCollageGenerator:
             img.close()
 
             draw = ImageDraw.Draw(canvas)
-            draw.text((10, 10), id_val, font=id_font, fill="black")
+            draw.text((10, 10), display_text, font=id_font, fill="black")
             if owned_ids and id_val.lower() in owned_ids:
                 StarWarsCollageGenerator._draw_owned_mark(
                     draw, canvas.width, canvas.height, pad_top
@@ -170,6 +171,7 @@ class StarWarsCollageGenerator:
                 id_val = str(row.get(id_key, "")).strip()
                 if not id_val:
                     return None
+                display_text = str(row.get("display_id") or id_val).strip()
                 url = f"{prefix}/{id_val}.png"
                 try:
                     async with semaphore:
@@ -180,6 +182,7 @@ class StarWarsCollageGenerator:
                         cls._prepare_image_from_bytes,
                         content,
                         id_val,
+                        display_text,
                         min_height,
                         id_font,
                         owned_ids,

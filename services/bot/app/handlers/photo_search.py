@@ -45,7 +45,11 @@ def photo_search_kb() -> InlineKeyboardMarkup:
     )
 
 
-def _candidate_picker_kb(candidates: list[dict]) -> InlineKeyboardMarkup:
+def _candidate_picker_kb(
+    candidates: list[dict],
+    *,
+    in_photo_mode: bool,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for row in candidates:
         bid = row["bricklink_id"]
@@ -53,9 +57,10 @@ def _candidate_picker_kb(candidates: list[dict]) -> InlineKeyboardMarkup:
         score = (row.get("score") or 0) * 100
         builder.button(
             text=f"{name} ({score:.0f}%)",
-            callback_data=f"photo_pick:{bid}",
+            callback_data=f"photo_pick:{'mode' if in_photo_mode else 'auto'}:{bid}",
         )
-    builder.button(text="↩️ Выйти из поиска", callback_data="photo_search_exit")
+    if in_photo_mode:
+        builder.button(text="↩️ Выйти из поиска", callback_data="photo_search_exit")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -98,9 +103,11 @@ async def _download_telegram_image(message: types.Message) -> tuple[bytes, str]:
 async def _process_photo_search(
     message: types.Message,
     state: FSMContext,
+    *,
+    in_photo_mode: bool,
 ) -> None:
     telegram_id = str(message.from_user.id)
-    kb = photo_search_kb()
+    kb = photo_search_kb() if in_photo_mode else None
     status = await message.answer("🔎 Ищу на Brickognize…", reply_markup=kb)
 
     try:
@@ -145,8 +152,6 @@ async def _process_photo_search(
         )
         return
 
-    await state.set_state(PhotoSearchState.waiting_photo)
-
     if len(candidates) == 1 or (candidates[0].get("score") or 0) >= 0.85:
         best = candidates[0]
         await send_figure_card_with_loading(
@@ -158,13 +163,17 @@ async def _process_photo_search(
             bricklink_url=best.get("bricklink_url"),
             recognition_score=best.get("score"),
         )
-        await message.answer(PHOTO_SEARCH_CONTINUE, parse_mode="HTML", reply_markup=kb)
+        if in_photo_mode:
+            await message.answer(
+                PHOTO_SEARCH_CONTINUE,
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
         return
 
-    await state.set_state(PhotoSearchState.waiting_photo)
     await message.answer(
         "Найдено несколько вариантов. Выберите подходящий:",
-        reply_markup=_candidate_picker_kb(candidates),
+        reply_markup=_candidate_picker_kb(candidates, in_photo_mode=in_photo_mode),
     )
 
 
@@ -187,7 +196,7 @@ async def cb_photo_search_exit(call: types.CallbackQuery, state: FSMContext) -> 
 
 @router.message(PhotoSearchState.waiting_photo, F.photo | F.document)
 async def on_photo_received(message: types.Message, state: FSMContext) -> None:
-    await _process_photo_search(message, state)
+    await _process_photo_search(message, state, in_photo_mode=True)
 
 
 @router.message(PhotoSearchState.waiting_photo)
@@ -205,7 +214,17 @@ async def cb_photo_pick(call: types.CallbackQuery, state: FSMContext) -> None:
     if not await ensure_access(call, "photo_search"):
         return
     await call.answer()
-    bricklink_id = call.data.split(":", 1)[1].lower()
+    parts = call.data.split(":")
+    source = "mode"
+    bricklink_id = ""
+    if len(parts) == 3:
+        _, source, bricklink_id = parts
+    elif len(parts) == 2:
+        _, bricklink_id = parts
+    else:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+    bricklink_id = bricklink_id.lower()
     telegram_id = str(call.from_user.id)
     try:
         await call.message.edit_text("⏳ Открываю карточку…")
@@ -217,10 +236,11 @@ async def cb_photo_pick(call: types.CallbackQuery, state: FSMContext) -> None:
         telegram_id,
         bricklink_id,
     )
-    await state.set_state(PhotoSearchState.waiting_photo)
-    await call.message.answer(
-        PHOTO_SEARCH_CONTINUE, parse_mode="HTML", reply_markup=photo_search_kb()
-    )
+    if source == "mode":
+        await state.set_state(PhotoSearchState.waiting_photo)
+        await call.message.answer(
+            PHOTO_SEARCH_CONTINUE, parse_mode="HTML", reply_markup=photo_search_kb()
+        )
 
 
 @router.message(F.photo | F.document)
@@ -237,4 +257,4 @@ async def on_any_photo_auto_search(
             return
     if not await ensure_access(message, "photo_search"):
         return
-    await _process_photo_search(message, state)
+    await _process_photo_search(message, state, in_photo_mode=False)

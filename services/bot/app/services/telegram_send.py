@@ -42,6 +42,31 @@ def send_document_sync(
                 raise RuntimeError(body.get("description", "sendDocument failed"))
 
 
+def send_photo_sync(
+    chat_id: int,
+    file_path: str,
+    caption: str,
+    *,
+    filename: str | None = None,
+) -> None:
+    if not TG_TOKEN:
+        raise RuntimeError("TG_TOKEN is not set")
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(file_path)
+
+    name = filename or os.path.basename(file_path)
+    url = f"{API_BASE}/bot{TG_TOKEN}/sendPhoto"
+    with open(file_path, "rb") as f:
+        data = {"chat_id": str(chat_id), "caption": caption[:1024], "parse_mode": "HTML"}
+        files = {"photo": (name, f)}
+        with httpx.Client(timeout=600.0) as client:
+            resp = client.post(url, data=data, files=files)
+            resp.raise_for_status()
+            body = resp.json()
+            if not body.get("ok"):
+                raise RuntimeError(body.get("description", "sendPhoto failed"))
+
+
 def send_message_sync(chat_id: int, text: str) -> None:
     if not TG_TOKEN:
         raise RuntimeError("TG_TOKEN is not set")

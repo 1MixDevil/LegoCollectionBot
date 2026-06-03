@@ -22,6 +22,8 @@ class DeleteFigures(StatesGroup):
 
 class InfoFigures(StatesGroup):
     waiting_serial = State()
+    waiting_edit_pick = State()
+    waiting_edit_value = State()
 
 
 class PhotoSearchState(StatesGroup):

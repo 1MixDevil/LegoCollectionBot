@@ -41,6 +41,27 @@ router = Router()
 PICK_PAGE_SIZE = int(os.getenv("COLLECTION_PICK_PAGE_SIZE", str(PICK_PAGE_SIZE)))
 
 
+def _with_counts(records: list[dict]) -> list[dict]:
+    counts: dict[str, int] = {}
+    first: dict[str, dict] = {}
+    ordered: list[str] = []
+    for rec in records:
+        bid = (rec.get("bricklink_id") or "").strip().lower()
+        if not bid:
+            continue
+        counts[bid] = counts.get(bid, 0) + 1
+        if bid not in first:
+            first[bid] = dict(rec)
+            ordered.append(bid)
+    out: list[dict] = []
+    for bid in ordered:
+        item = first[bid]
+        item["count"] = counts[bid]
+        item["display_id"] = f"{bid} x{counts[bid]}" if counts[bid] > 1 else bid
+        out.append(item)
+    return out
+
+
 async def _main_kb(user_id: int):
     return await get_main_keyboard(str(user_id))
 
@@ -368,7 +389,7 @@ async def cb_collection_tierlist(call: types.CallbackQuery) -> None:
             reply_markup=await _main_kb(call.from_user.id),
         )
 
-    rows = df.to_dict(orient="records")
+    rows = _with_counts(df.to_dict(orient="records"))
     total = len(rows)
     if should_send_in_batches(total):
         await call.message.answer(
@@ -382,7 +403,7 @@ async def cb_collection_tierlist(call: types.CallbackQuery) -> None:
         rows,
         title="Моя коллекция",
         telegram_id=user_id,
-        caption_label=f"{total} фиг.",
+        caption_label=f"{total} записей",
         caption_prefix="🖼 Коллаж",
         reply_markup=collection_menu_kb(),
     )
@@ -400,7 +421,21 @@ async def cb_collection_excel(call: types.CallbackQuery) -> None:
             reply_markup=await _main_kb(call.from_user.id),
         )
 
-    df = pd.DataFrame(records)
+    rows = _with_counts(records)
+    df = pd.DataFrame(rows)
+    preferred_cols = [
+        "bricklink_id",
+        "name",
+        "count",
+        "price_buy",
+        "price_sale",
+        "description",
+        "buy_date",
+        "sale_date",
+    ]
+    cols = [c for c in preferred_cols if c in df.columns]
+    if cols:
+        df = df[cols]
     buf = BytesIO()
     df.to_excel(buf, index=False)
     buf.seek(0)
@@ -408,6 +443,6 @@ async def cb_collection_excel(call: types.CallbackQuery) -> None:
     await call.bot.send_document(
         chat_id=call.from_user.id,
         document=document,
-        caption=f"📊 Экспорт: {len(records)} записей",
+        caption=f"📊 Экспорт: {len(rows)} уникальных фигурок",
         reply_markup=collection_menu_kb(),
     )

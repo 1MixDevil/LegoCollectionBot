@@ -123,6 +123,26 @@ def parse_serials_only(text: str) -> tuple[str, list[str]] | None:
     return None
 
 
+def _dedupe_records_with_counts(records: list[dict]) -> tuple[list[dict], list[str]]:
+    uniq: list[dict] = []
+    counts: dict[str, int] = {}
+    by_id: dict[str, dict] = {}
+    for rec in records:
+        bid = (rec.get("bricklink_id") or "").strip().lower()
+        if not bid:
+            continue
+        counts[bid] = counts.get(bid, 0) + 1
+        if bid not in by_id:
+            by_id[bid] = rec
+            uniq.append(rec)
+    for rec in uniq:
+        bid = (rec.get("bricklink_id") or "").strip().lower()
+        cnt = counts.get(bid, 1)
+        rec["display_id"] = f"{bid} x{cnt}" if cnt > 1 else bid
+    duplicates = [f"{bid} x{cnt}" for bid, cnt in counts.items() if cnt > 1]
+    return uniq, duplicates
+
+
 async def _owned_ids(telegram_id: str, mark_owned: bool) -> frozenset[str] | None:
     if not mark_owned:
         return None
@@ -177,6 +197,16 @@ async def _deliver_tierlist(
     caption_label = pending.get("caption_label") or ""
     kb = await get_main_keyboard(telegram_id)
     owned = await _owned_ids(telegram_id, mark_owned)
+    records, duplicates = _dedupe_records_with_counts(records)
+    if duplicates:
+        preview = ", ".join(duplicates[:10])
+        more = "" if len(duplicates) <= 10 else f" (+{len(duplicates) - 10})"
+        await message.answer(
+            "ℹ️ Повторы в tier-листе объединены:\n"
+            f"<code>{preview}{more}</code>",
+            parse_mode="HTML",
+        )
+        caption_label = (caption_label + "; " if caption_label else "") + "повторы объединены"
 
     role = await get_user_role(telegram_id)
     records, dropped = cap_tierlist_records(records, role)

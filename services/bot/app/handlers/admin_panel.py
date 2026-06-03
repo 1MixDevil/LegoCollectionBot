@@ -2,6 +2,7 @@ import logging
 
 import httpx
 from aiogram import F, Router, types
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 
 from app.api.auth import get_user_by_telegram, list_users, set_user_role
@@ -15,15 +16,57 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
+def _extract_tg_username(user: dict) -> str | None:
+    for key in ("resolved_tg_username", "telegram_username", "username", "tg_username"):
+        raw = str(user.get(key) or "").strip()
+        if not raw or raw.isdigit():
+            continue
+        if " " in raw:
+            continue
+        return raw.lstrip("@")
+    return None
+
+
+async def _resolve_username_via_telegram(bot, user: dict) -> str | None:
+    tid_raw = str(user.get("telegram_username") or "").strip()
+    if not tid_raw.isdigit():
+        return _extract_tg_username(user)
+    try:
+        chat = await bot.get_chat(int(tid_raw))
+    except (TelegramBadRequest, ValueError):
+        return _extract_tg_username(user)
+    except Exception:
+        logger.debug("get_chat failed for %s", tid_raw, exc_info=True)
+        return _extract_tg_username(user)
+    uname = (getattr(chat, "username", None) or "").strip()
+    if uname:
+        return uname.lstrip("@")
+    return _extract_tg_username(user)
+
+
+async def _with_resolved_usernames(bot, users: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for user in users:
+        item = dict(user)
+        item["resolved_tg_username"] = await _resolve_username_via_telegram(bot, item)
+        out.append(item)
+    return out
+
+
 def _format_user_card(user: dict) -> str:
     role = user.get("role", "member")
     label = ROLE_LABELS.get(role, role)
-    username = user.get("username") or "—"
-    tid = user.get("telegram_username", "—")
+    tg_username = _extract_tg_username(user)
+    uname_ref = (
+        f'<a href="https://t.me/{tg_username}">@{tg_username}</a>'
+        if tg_username
+        else "—"
+    )
+    profile_name = str(user.get("first_name") or user.get("display_name") or "").strip() or "—"
     return (
         f"<b>Пользователь #{user['id']}</b>\n"
-        f"Имя: {username}\n"
-        f"Telegram ID: <code>{tid}</code>\n"
+        f"Имя: {profile_name}\n"
+        f"Логин: {uname_ref}\n"
         f"Роль: <b>{label}</b>\n\n"
         "Выберите новую роль:"
     )
@@ -73,6 +116,7 @@ async def on_admin_telegram_id(message: types.Message, state: FSMContext):
             return
         await message.answer("Ошибка сервиса авторизации.")
         return
+    user["resolved_tg_username"] = await _resolve_username_via_telegram(message.bot, user)
     await state.clear()
     await message.answer(
         _format_user_card(user),
@@ -99,6 +143,7 @@ async def cb_admin_users_list(call: types.CallbackQuery, state: FSMContext):
             call.message, "Пользователей пока нет.", reply_markup=admin_panel_kb()
         )
         return
+    users = await _with_resolved_usernames(call.bot, users)
     await safe_edit_or_answer(
         call.message,
         f"👥 Пользователи (стр. {page + 1}):",
@@ -121,6 +166,7 @@ async def cb_admin_pick_user(call: types.CallbackQuery, state: FSMContext):
     if not user:
         await call.message.answer("Пользователь не найден.")
         return
+    user["resolved_tg_username"] = await _resolve_username_via_telegram(call.bot, user)
     await safe_edit_or_answer(
         call.message,
         _format_user_card(user),
@@ -141,6 +187,7 @@ async def cb_admin_set_role(call: types.CallbackQuery, state: FSMContext):
         logger.exception("set_user_role failed")
         await call.answer("Ошибка при смене роли.", show_alert=True)
         return
+    user["resolved_tg_username"] = await _resolve_username_via_telegram(call.bot, user)
     label = ROLE_LABELS.get(role, role)
     await call.answer(f"Роль изменена: {label}")
     await safe_edit_or_answer(

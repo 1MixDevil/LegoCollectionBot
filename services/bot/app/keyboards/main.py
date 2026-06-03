@@ -154,13 +154,18 @@ def admin_users_list_kb(
     chunk = users[start : start + page_size]
     rows: list[list[InlineKeyboardButton]] = []
     for u in chunk:
-        tid = u.get("telegram_username", "?")
-        name = u.get("username") or "—"
+        handle = ""
+        for key in ("resolved_tg_username", "telegram_username", "username", "tg_username"):
+            raw = str(u.get(key) or "").strip()
+            if raw and not raw.isdigit() and " " not in raw:
+                handle = raw.lstrip("@")
+                break
+        login = f"@{handle}" if handle else "без @username"
         role = u.get("role", "member")
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{name} ({tid}) · {ROLE_LABELS.get(role, role)}",
+                    text=f"{login} · {ROLE_LABELS.get(role, role)}",
                     callback_data=f"admin_pick:{u['id']}",
                 )
             ]
@@ -333,6 +338,14 @@ def make_info_kb(serial: str, *, in_collection: bool = False) -> InlineKeyboardM
         ],
     ]
     if in_collection:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✏️ Редактировать запись",
+                    callback_data=f"info_action:edit:{serial}",
+                ),
+            ]
+        )
         rows.append(
             [
                 InlineKeyboardButton(

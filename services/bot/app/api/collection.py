@@ -31,6 +31,17 @@ async def add_figure_to_user(
         return response.json()
 
 
+async def update_user_figure_record(rec_id: int, **fields: Any) -> dict[str, Any]:
+    payload = dict(fields)
+    async with httpx.AsyncClient() as client:
+        response = await client.patch(
+            f"{COLLECTION_BASE_URL}/figure/user/{rec_id}",
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
 async def delete_figure_from_user(telegram_id: str, bricklink_id: str) -> None:
     user_id = await resolve_user_id(telegram_id)
     async with httpx.AsyncClient() as client:
