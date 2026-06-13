@@ -48,7 +48,7 @@ def build_collection_summary(records: list[Any]) -> str:
         return (
             "📦 <b>Моя коллекция</b>\n\n"
             "Коллекция пуста.\n"
-            "Нажмите «➕ Добавить», чтобы внести первую фигурку."
+            "Нажмите «➕ Добавить фигурку» ниже."
         )
 
     total = len(rows)
@@ -91,8 +91,8 @@ def build_collection_summary(records: list[Any]) -> str:
         lines.append(f"📅 С датой продажи: <b>{with_sale_date}</b>")
 
     lines.append(
-        "\n<i>Сразу введите артикул или название для поиска — "
-        "или выберите кнопку ниже.</i>"
+        "\n<i>💡 Введите артикул или слова из названия — "
+        "откроется карточка или отфильтрованный список.</i>"
     )
     return "\n".join(lines)
 

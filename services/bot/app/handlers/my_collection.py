@@ -16,6 +16,7 @@ from app.core.access import ensure_access, get_main_keyboard
 from app.keyboards.collection import (
     collection_browse_kb,
     collection_confirm_clear_kb,
+    collection_empty_kb,
     collection_figure_kb,
     collection_menu_kb,
     collection_page_picker_kb,
@@ -90,7 +91,7 @@ async def _show_collection_home(
 ) -> None:
     records = await _load_records(telegram_id)
     text = build_collection_summary(records)
-    kb = collection_menu_kb() if records else await _main_kb(int(telegram_id))
+    kb = collection_menu_kb() if records else collection_empty_kb()
 
     if records:
         await _enter_collection_search_mode(state)
@@ -174,7 +175,7 @@ async def cb_collection_browse(call: types.CallbackQuery, state: FSMContext) -> 
     if not records:
         await call.message.answer(
             "Коллекция пуста.",
-            reply_markup=await _main_kb(call.from_user.id),
+            reply_markup=collection_empty_kb(),
         )
         return
     data = await state.get_data()
@@ -275,13 +276,16 @@ async def on_collection_browse_text(message: types.Message, state: FSMContext) -
 
     if text in ids or len(entries) == 1:
         bid = text if text in ids else entries[0]["bricklink_id"]
+        copy_count = sum(
+            1 for r in records if (r.get("bricklink_id") or "").lower() == bid
+        )
         await state.set_state(CollectionState.browsing)
         await send_figure_card_with_loading(
             message.bot,
             message.chat.id,
             str(message.from_user.id),
             bid,
-            reply_markup=collection_figure_kb(bid),
+            reply_markup=collection_figure_kb(bid, copy_count=max(1, copy_count)),
         )
         return
 
@@ -300,13 +304,17 @@ async def cb_coll_pick(call: types.CallbackQuery, state: FSMContext) -> None:
         return
     bid = call.data.split(":", 1)[1].lower()
     await call.answer()
+    records = await _load_records(str(call.from_user.id))
+    copy_count = sum(
+        1 for r in records if (r.get("bricklink_id") or "").lower() == bid
+    )
     await state.set_state(CollectionState.browsing)
     await send_figure_card_with_loading(
         call.bot,
         call.message.chat.id,
         str(call.from_user.id),
         bid,
-        reply_markup=collection_figure_kb(bid),
+        reply_markup=collection_figure_kb(bid, copy_count=max(1, copy_count)),
     )
 
 
@@ -376,10 +384,11 @@ async def cb_collection_tierlist(call: types.CallbackQuery) -> None:
     records = await _load_records(user_id)
 
     if not records:
-        return await call.message.answer(
+        await call.message.answer(
             "Ваша коллекция пуста.",
-            reply_markup=await _main_kb(call.from_user.id),
+            reply_markup=collection_empty_kb(),
         )
+        return
 
     df = StarWarsCollageGenerator.filter_by_keyword(
         data=records, name_key="name", keyword=""

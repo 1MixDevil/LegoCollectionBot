@@ -1,6 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.keyboards.main import make_info_kb
+from app.keyboards.nav_labels import BACK_LABEL, MAIN_MENU_LABEL
 from app.services.collection_stats import PICK_PAGE_SIZE, figure_button_label
 
 PAGE_PICKER_ROW = 6
@@ -17,7 +18,7 @@ def collection_menu_kb() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🖼️ Коллаж tier‑лист",
+                    text="🖼️ Коллаж",
                     callback_data="collection_tierlist",
                 ),
                 InlineKeyboardButton(
@@ -31,7 +32,16 @@ def collection_menu_kb() -> InlineKeyboardMarkup:
                     callback_data="collection_clear_confirm",
                 ),
             ],
-            [InlineKeyboardButton(text="↩️ В главное меню", callback_data="cancel")],
+            [InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel")],
+        ]
+    )
+
+
+def collection_empty_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить фигурку", callback_data="add")],
+            [InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel")],
         ]
     )
 
@@ -111,22 +121,18 @@ def collection_browse_kb(
         rows.append(nav)
 
     rows.append(
-        [
-            InlineKeyboardButton(
-                text="🔍 Поиск в списке",
-                callback_data="collection_find",
-            ),
-        ]
-    )
-    rows.append(
         [InlineKeyboardButton(text="↩️ К коллекции", callback_data="my_collection")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def collection_figure_kb(bricklink_id: str) -> InlineKeyboardMarkup:
+def collection_figure_kb(bricklink_id: str, *, copy_count: int = 1) -> InlineKeyboardMarkup:
     """Карточка из списка коллекции: действия + возврат к списку."""
-    base = make_info_kb(bricklink_id, in_collection=True)
+    base = make_info_kb(
+        bricklink_id,
+        in_collection=True,
+        copy_count=copy_count,
+    )
     rows = [list(row) for row in base.inline_keyboard]
     rows.insert(
         -1,

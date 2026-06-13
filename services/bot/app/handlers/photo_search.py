@@ -14,6 +14,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.core.access import ensure_access, get_main_keyboard
 from app.services.brickognize import format_top_candidates, search_by_image_bytes
 from app.services.figure_display import send_figure_card_with_loading
+from app.services.fsm_guard import allows_global_photo_search
 from app.services.menu import send_main_menu
 from app.states.figures import PhotoSearchState
 logger = logging.getLogger(__name__)
@@ -248,8 +249,8 @@ async def on_any_photo_auto_search(
     message: types.Message,
     state: FSMContext,
 ) -> None:
-    """Любое фото в чате → поиск, если не в режиме поиска по фото уже."""
-    if await state.get_state() == PhotoSearchState.waiting_photo.state:
+    """Фото вне активных сценариев → поиск по Brickognize."""
+    if not await allows_global_photo_search(state):
         return
     if message.document:
         mime = message.document.mime_type or ""

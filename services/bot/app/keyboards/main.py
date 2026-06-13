@@ -2,6 +2,7 @@ from aiogram import types
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.core.permissions import ROLE_LABELS, can_access
+from app.keyboards.nav_labels import BACK_LABEL, MAIN_MENU_LABEL
 
 
 def _row(*buttons: InlineKeyboardButton | None) -> list[InlineKeyboardButton]:
@@ -38,7 +39,7 @@ def build_main_kb(role: str) -> InlineKeyboardMarkup:
 
     if can_access(role, "tierlist"):
         rows.append(
-            [InlineKeyboardButton(text="🏷 Tier‑лист", callback_data="create_tierlist")]
+            [InlineKeyboardButton(text="🖼 Коллаж", callback_data="tierlist_menu")]
         )
 
     row3 = _row(
@@ -51,11 +52,6 @@ def build_main_kb(role: str) -> InlineKeyboardMarkup:
     )
     if row3:
         rows.append(row3)
-
-    if can_access(role, "marketplace"):
-        rows.append(
-            [InlineKeyboardButton(text="🛒 Торговля", callback_data="marketplace")]
-        )
 
     if can_access(role, "help"):
         rows.append([InlineKeyboardButton(text="❓ Помощь", callback_data="help")])
@@ -102,8 +98,27 @@ def tierlist_mode_kb(role: str) -> InlineKeyboardMarkup:
                 )
             ]
         )
-    rows.append([InlineKeyboardButton(text="↩️ Назад", callback_data="cancel")])
+    rows.append([InlineKeyboardButton(text=BACK_LABEL, callback_data="tierlist_back_name")])
+    rows.append([InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+    """Подменю коллажей."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="➕ Создать коллаж",
+                    callback_data="create_tierlist",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📦 Коллаж моей коллекции",
+                    callback_data="collection_tierlist",
+                ),
+            ],
+            [InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel")],
+        ]
+    )
 
 
 def admin_panel_kb() -> InlineKeyboardMarkup:
@@ -121,7 +136,7 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
                     callback_data="admin_users:0",
                 )
             ],
-            [InlineKeyboardButton(text="↩️ Назад", callback_data="cancel")],
+            [InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel")],
         ]
     )
 
@@ -140,7 +155,7 @@ def admin_role_kb(user_id: int, current_role: str) -> InlineKeyboardMarkup:
             ]
         )
     buttons.append(
-        [InlineKeyboardButton(text="↩️ В админ‑панель", callback_data="admin_panel")]
+            [InlineKeyboardButton(text="↩️ В админ‑панель", callback_data="admin_panel")]
     )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -182,7 +197,7 @@ def admin_users_list_kb(
     if nav:
         rows.append(nav)
     rows.append(
-        [InlineKeyboardButton(text="↩️ В админ‑панель", callback_data="admin_panel")]
+            [InlineKeyboardButton(text="↩️ В админ‑панель", callback_data="admin_panel")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -297,12 +312,12 @@ confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="Отмена",      callback_data="confirm_no")],
 ])
 
-# Навигационная клавиатура (Назад + Отмена)
+# Навигационная клавиатура (Назад + выход в меню)
 def nav_kb(back: str = None) -> InlineKeyboardMarkup:
     buttons = []
     if back:
-        buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=back))
-    buttons.append(InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"))
+        buttons.append(InlineKeyboardButton(text=BACK_LABEL, callback_data=back))
+    buttons.append(InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel"))
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
 
@@ -311,8 +326,8 @@ def prompt_kb(back: str | None = None, skip: str | None = None) -> InlineKeyboar
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     if back:
-        row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=back))
-    row.append(InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"))
+        row.append(InlineKeyboardButton(text=BACK_LABEL, callback_data=back))
+    row.append(InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel"))
     rows.append(row)
     if skip:
         rows.append([InlineKeyboardButton(text="⏭ Пропустить", callback_data=skip)])
@@ -320,40 +335,35 @@ def prompt_kb(back: str | None = None, skip: str | None = None) -> InlineKeyboar
 
 # === Существующие функции оставлены без изменений ===
 
-def make_info_kb(serial: str, *, in_collection: bool = False) -> InlineKeyboardMarkup:
+def make_info_kb(
+    serial: str,
+    *,
+    in_collection: bool = False,
+    copy_count: int = 0,
+) -> InlineKeyboardMarkup:
     """
     Клавиатура карточки фигурки.
-    «Продать» и «Удалить» — только если фигурка уже в коллекции пользователя.
+    «Удалить» — одну запись; при нескольких копиях подпись уточняется.
     """
-    rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(
-                text="Добавить в «Желаемое»",
-                callback_data=f"info_action:wishlist:{serial}",
-            ),
-            InlineKeyboardButton(
-                text="Купить",
-                callback_data=f"info_action:buy:{serial}",
-            ),
-        ],
-    ]
+    rows: list[list[InlineKeyboardButton]] = []
     if in_collection:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="✏️ Редактировать запись",
+                    text="✏️ Редактировать",
                     callback_data=f"info_action:edit:{serial}",
                 ),
             ]
         )
+        delete_label = (
+            "🗑 Удалить одну копию"
+            if copy_count > 1
+            else "🗑 Удалить из коллекции"
+        )
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="Продать",
-                    callback_data=f"info_action:sell:{serial}",
-                ),
-                InlineKeyboardButton(
-                    text="Удалить из коллекции",
+                    text=delete_label,
                     callback_data=f"info_action:delete:{serial}",
                 ),
             ]
@@ -362,13 +372,13 @@ def make_info_kb(serial: str, *, in_collection: bool = False) -> InlineKeyboardM
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="Добавить в коллекцию",
+                    text="➕ Добавить в коллекцию",
                     callback_data=f"info_action:add:{serial}",
                 ),
             ]
         )
     rows.append(
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]
+        [InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -394,7 +404,7 @@ def make_suggestions_kb(suggestions: list[dict]) -> InlineKeyboardMarkup:
         display_text = f"{display_name}{suffix}"
         keyboard.append([InlineKeyboardButton(text=display_text, callback_data=callback_data)])
 
-    keyboard.append([InlineKeyboardButton(text="Отмена", callback_data="cancel")])
+    keyboard.append([InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def add_choice_kb() -> InlineKeyboardMarkup:
@@ -402,11 +412,11 @@ def add_choice_kb() -> InlineKeyboardMarkup:
     Создает inline-клавиатуру с двумя кнопками в первой строке и одной кнопкой во второй.
     """
     buttons_row1 = [
-        InlineKeyboardButton(text="➕ Добавить одну фигурку", callback_data="add_solo_figure"),
-        InlineKeyboardButton(text="➕➕ Добавить несколько фигурок", callback_data="add_few_figure"),
+        InlineKeyboardButton(text="➕ Одна фигурка", callback_data="add_solo_figure"),
+        InlineKeyboardButton(text="➕➕ Несколько", callback_data="add_few_figure"),
     ]
     buttons_row2 = [
-        InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"),
+        InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel"),
     ]
 
     return InlineKeyboardMarkup(inline_keyboard=[buttons_row1, buttons_row2])

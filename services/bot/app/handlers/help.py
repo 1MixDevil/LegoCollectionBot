@@ -7,8 +7,7 @@ from app.api.auth import list_users
 from app.content.guide import USER_GUIDE_HTML
 from app.core.access import ensure_access, get_main_keyboard
 from app.core.admin_ids import permanent_admin_ids
-from app.keyboards.help import help_menu_kb
-from app.keyboards.main import prompt_kb
+from app.keyboards.help import help_contact_kb, help_menu_kb
 from app.states.figures import HelpState
 from app.utils.message import safe_edit_or_answer
 
@@ -68,9 +67,9 @@ async def cb_help_contact_admin(call: types.CallbackQuery, state: FSMContext) ->
         "✉️ <b>Связаться с администратором</b>\n\n"
         "Опишите проблему или какую серию фигурок нужно добавить в каталог.\n"
         "Отправьте одним сообщением — бот перешлёт его всем администраторам.\n\n"
-        "Если передумали — нажмите «Отмена».",
+        "Если передумали — «Назад» или «В главное меню».",
         parse_mode="HTML",
-        reply_markup=prompt_kb(),
+        reply_markup=help_contact_kb(),
     )
 
 
@@ -78,8 +77,8 @@ async def cb_help_contact_admin(call: types.CallbackQuery, state: FSMContext) ->
 async def on_admin_message_text(message: types.Message, state: FSMContext) -> None:
     if not message.text or message.text.startswith("/"):
         await message.answer(
-            "Отправьте текст сообщения или нажмите «Отмена».",
-            reply_markup=prompt_kb(),
+            "Отправьте текст сообщения или нажмите «В главное меню».",
+            reply_markup=help_contact_kb(),
         )
         return
 
@@ -125,5 +124,5 @@ async def on_admin_message_text(message: types.Message, state: FSMContext) -> No
 async def on_admin_message_invalid(message: types.Message) -> None:
     await message.answer(
         "Нужен текст. Фото и файлы пока не поддерживаются — опишите словами.",
-        reply_markup=prompt_kb(),
+        reply_markup=help_contact_kb(),
     )

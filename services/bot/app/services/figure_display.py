@@ -9,10 +9,11 @@ from typing import Any, Optional
 
 import httpx
 from aiogram import Bot
-from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, Message
 from httpx import HTTPStatusError
 
 from app.api.collection import get_figure_info, get_figure_market, list_user_figures
+from app.keyboards.collection import collection_figure_kb
 from app.keyboards.main import make_info_kb
 
 logger = logging.getLogger(__name__)
@@ -306,7 +307,12 @@ async def send_figure_card(
         market=market,
     )
     in_collection = bool(stats.get("count", 0))
-    kb = reply_markup or make_info_kb(bricklink_id, in_collection=in_collection)
+    copy_count = int(stats.get("count") or 0)
+    kb = reply_markup or make_info_kb(
+        bricklink_id,
+        in_collection=in_collection,
+        copy_count=copy_count,
+    )
     image_url = f"https://img.bricklink.com/ItemImage/MN/0/{bricklink_id}.png"
 
     try:
@@ -335,6 +341,86 @@ async def send_figure_card(
         )
 
     return in_catalog
+
+
+def message_from_collection_list(message: Message) -> bool:
+    """Карточка открыта из списка коллекции (есть кнопка «К списку»)."""
+    markup = message.reply_markup
+    if not markup or not markup.inline_keyboard:
+        return False
+    for row in markup.inline_keyboard:
+        for btn in row:
+            if btn.callback_data == "collection_browse_resume":
+                return True
+    return False
+
+
+def build_figure_card_kb(
+    bricklink_id: str,
+    *,
+    in_collection: bool,
+    copy_count: int = 0,
+    from_collection_list: bool = False,
+) -> InlineKeyboardMarkup:
+    if from_collection_list:
+        return collection_figure_kb(bricklink_id, copy_count=copy_count)
+    return make_info_kb(
+        bricklink_id,
+        in_collection=in_collection,
+        copy_count=copy_count,
+    )
+
+
+async def refresh_figure_card_message(
+    message: Message,
+    telegram_id: str,
+    bricklink_id: str,
+) -> None:
+    """Обновляет подпись и кнопки уже отправленной карточки."""
+    from_collection = message_from_collection_list(message)
+    in_catalog, catalog_name, user_record, market, stats = await _fetch_figure_card_data(
+        telegram_id, bricklink_id.lower()
+    )
+    copy_count = int(stats.get("count") or 0)
+    in_collection = copy_count > 0
+    caption = build_caption(
+        name=catalog_name or bricklink_id,
+        bricklink_id=bricklink_id.lower(),
+        in_catalog=in_catalog,
+        catalog_name=catalog_name,
+        user_record=user_record,
+        collection_stats=stats,
+        market=market,
+    )
+    kb = build_figure_card_kb(
+        bricklink_id.lower(),
+        in_collection=in_collection,
+        copy_count=copy_count,
+        from_collection_list=from_collection,
+    )
+    try:
+        if message.photo:
+            await message.edit_caption(
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=kb,
+            )
+        else:
+            await message.edit_text(
+                text=caption,
+                parse_mode="HTML",
+                reply_markup=kb,
+                disable_web_page_preview=False,
+            )
+    except Exception:
+        logger.debug("refresh figure card failed, sending new", exc_info=True)
+        await send_figure_card(
+            message.bot,
+            message.chat.id,
+            telegram_id,
+            bricklink_id,
+            reply_markup=kb,
+        )
 
 
 async def send_figure_card_with_loading(

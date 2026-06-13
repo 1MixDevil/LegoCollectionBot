@@ -68,7 +68,8 @@ async def cmd_back_to_serial(call: types.CallbackQuery, state: FSMContext) -> No
     await state.set_state(AddFigureState.waiting_serial)
     await answer_callback(
         call,
-        "Введите артикул (bricklink_id) фигурки:",
+        "Введите артикул BrickLink (например <code>sw0001a</code>):",
+        parse_mode="HTML",
         reply_markup=prompt_kb(back="add"),
     )
 

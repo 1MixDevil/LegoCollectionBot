@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from app.api.auth import get_user_by_telegram, list_users, set_user_role
 from app.core.access import ensure_access, get_main_keyboard, get_user_role
 from app.core.permissions import ROLE_LABELS
-from app.keyboards.main import admin_panel_kb, admin_role_kb, admin_users_list_kb
+from app.keyboards.main import admin_panel_kb, admin_role_kb, admin_users_list_kb, prompt_kb
 from app.states.figures import AdminPanelState
 from app.utils.message import answer_callback, safe_edit_or_answer
 
@@ -95,6 +95,7 @@ async def cb_admin_find(call: types.CallbackQuery, state: FSMContext):
     await call.message.answer(
         "Введите числовой <b>Telegram ID</b> пользователя:",
         parse_mode="HTML",
+        reply_markup=prompt_kb(back="admin_panel"),
     )
 
 
@@ -104,17 +105,25 @@ async def on_admin_telegram_id(message: types.Message, state: FSMContext):
         return
     tid = (message.text or "").strip()
     if not tid.isdigit():
-        await message.answer("Нужен числовой ID, например <code>123456789</code>.", parse_mode="HTML")
+        await message.answer(
+            "Нужен числовой ID, например <code>123456789</code>.",
+            parse_mode="HTML",
+            reply_markup=prompt_kb(back="admin_panel"),
+        )
         return
     try:
         user = await get_user_by_telegram(tid)
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             await message.answer(
-                "Пользователь не найден. Пусть откроет бота и отправит /start."
+                "Пользователь не найден. Пусть откроет бота и отправит /start.",
+                reply_markup=prompt_kb(back="admin_panel"),
             )
             return
-        await message.answer("Ошибка сервиса авторизации.")
+        await message.answer(
+            "Ошибка сервиса авторизации.",
+            reply_markup=prompt_kb(back="admin_panel"),
+        )
         return
     user["resolved_tg_username"] = await _resolve_username_via_telegram(message.bot, user)
     await state.clear()

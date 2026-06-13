@@ -42,6 +42,37 @@ async def update_user_figure_record(rec_id: int, **fields: Any) -> dict[str, Any
         return response.json()
 
 
+async def update_all_user_figure_records(
+    telegram_id: str,
+    bricklink_id: str,
+    **fields: Any,
+) -> int:
+    """Обновляет все записи пользователя с данным артикулом. Возвращает число обновлённых."""
+    bricklink_id = bricklink_id.lower()
+    records = await list_user_figures(telegram_id)
+    updated = 0
+    for rec in records:
+        if (rec.get("bricklink_id") or "").lower() != bricklink_id:
+            continue
+        rec_id = rec.get("id")
+        if rec_id is None:
+            continue
+        await update_user_figure_record(int(rec_id), **fields)
+        updated += 1
+    return updated
+
+
+async def figure_exists_in_catalog(telegram_id: str, bricklink_id: str) -> bool:
+    """Проверка наличия фигурки в общем каталоге."""
+    try:
+        await get_figure_info(telegram_id, bricklink_id.lower())
+        return True
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return False
+        raise
+
+
 async def delete_figure_from_user(telegram_id: str, bricklink_id: str) -> None:
     user_id = await resolve_user_id(telegram_id)
     async with httpx.AsyncClient() as client:

@@ -14,7 +14,8 @@ from app.api.collection import (
 from app.core.access import ensure_access, get_main_keyboard, get_user_role
 from app.core.config import MAX_SERIALS_PER_REQUEST
 from app.core.permissions import can_access
-from app.keyboards.main import nav_kb, tierlist_mode_kb
+from app.keyboards.main import nav_kb, tierlist_menu_kb, tierlist_mode_kb
+from app.keyboards.nav_labels import MAIN_MENU_LABEL
 from app.services.collage_delivery import (
     generate_and_send_collage,
     send_collage_batches,
@@ -31,6 +32,7 @@ from app.services.tierlist_title import (
     normalize_tierlist_title,
 )
 from app.states.figures import CreateTierList
+from app.utils.message import safe_edit_or_answer
 from app.utils.serial_parse import parse_serial_list
 from app.utils.telegram_network import safe_callback_answer
 
@@ -64,8 +66,62 @@ def tierlist_mark_owned_kb() -> InlineKeyboardMarkup:
                     callback_data="tierlist_mark_owned:no",
                 ),
             ],
-            [InlineKeyboardButton(text="↩️ Отмена", callback_data="cancel")],
+            [InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel")],
         ]
+    )
+
+
+TIERLIST_NAME_PROMPT = (
+    f"Введите название коллажа (до <b>{TIERLIST_TITLE_MAX}</b> символов).\n"
+    "Короткое имя — на коллаже и в подписи к файлу.\n"
+    "Если не нужно — отправьте <code>null</code>.\n\n"
+    "<i>Не вставляйте сюда список артикулов — их введёте на следующем шаге.</i>"
+)
+
+
+async def _prompt_tierlist_name(message: types.Message) -> None:
+    await message.answer(TIERLIST_NAME_PROMPT, parse_mode="HTML", reply_markup=nav_kb())
+
+
+@router.callback_query(lambda cb: cb.data == "tierlist_menu")
+async def cb_tierlist_menu(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "tierlist"):
+        return
+    await state.clear()
+    await call.answer()
+    await safe_edit_or_answer(
+        call.message,
+        "🖼 <b>Коллаж</b>\n\n"
+        "• <b>Создать коллаж</b> — выбрать фигурки и собрать tier‑лист.\n"
+        "• <b>Коллаж коллекции</b> — все фигурки из вашей коллекции.",
+        parse_mode="HTML",
+        reply_markup=tierlist_menu_kb(),
+    )
+
+
+@router.callback_query(lambda cb: cb.data == "tierlist_back_name")
+async def cb_tierlist_back_name(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "tierlist"):
+        return
+    await call.answer()
+    await state.set_state(CreateTierList.waiting_name_list)
+    await call.message.answer(
+        TIERLIST_NAME_PROMPT,
+        parse_mode="HTML",
+        reply_markup=nav_kb(back="tierlist_menu"),
+    )
+
+
+@router.callback_query(lambda cb: cb.data == "tierlist_back_mode")
+async def cb_tierlist_back_mode(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "tierlist"):
+        return
+    await call.answer()
+    role = await get_user_role(str(call.from_user.id))
+    await state.set_state(CreateTierList.waiting_mode)
+    await call.message.answer(
+        "Как собрать коллаж?",
+        reply_markup=tierlist_mode_kb(role),
     )
 
 
@@ -305,11 +361,9 @@ async def cb_start_tierlist(call: types.CallbackQuery, state: FSMContext):
         await _notify_stale_button(call, "Это старое меню.")
         return
     await call.message.answer(
-        f"Введите название tier‑листа (до <b>{TIERLIST_TITLE_MAX}</b> символов).\n"
-        "Короткое имя — на коллаже и в подписи к файлу.\n"
-        "Если не нужно — отправьте <code>null</code>.\n\n"
-        "<i>Не вставляйте сюда список артикулов — их введёте на следующем шаге.</i>",
+        TIERLIST_NAME_PROMPT,
         parse_mode="HTML",
+        reply_markup=nav_kb(back="tierlist_menu"),
     )
     await state.set_state(CreateTierList.waiting_name_list)
 
@@ -350,7 +404,7 @@ async def on_name_entered(message: types.Message, state: FSMContext):
         MODE_HINTS["serials"]
         + f"\n\nЛимит: до {MAX_SERIALS_PER_REQUEST} артикулов.",
         parse_mode="HTML",
-        reply_markup=nav_kb(),
+        reply_markup=nav_kb(back="tierlist_back_name"),
     )
     await state.set_state(CreateTierList.waiting_serials)
 
@@ -373,7 +427,7 @@ async def cb_tierlist_mode(call: types.CallbackQuery, state: FSMContext):
             f"\n\nЛимит: до {TIERLIST_KEYWORD_MAX} "
             f"(если больше {COLLAGE_BATCH_SIZE} — несколько файлов)."
         )
-    await call.message.answer(hint, parse_mode="HTML", reply_markup=nav_kb())
+    await call.message.answer(hint, parse_mode="HTML", reply_markup=nav_kb(back="tierlist_back_mode"))
     await state.set_state(CreateTierList.waiting_serials)
 
 

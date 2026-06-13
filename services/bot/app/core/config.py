@@ -17,9 +17,15 @@ COLLECTION_BASE_URL = f"http://{COLLECTION_HOST}:{COLLECTION_PORT}"
 RUS_LABELS = {
     "request_price_buy": "Запрашивать цену покупки",
     "request_price_sale": "Запрашивать цену продажи",
-    "is_seller": "Продавец",
     "show_description": "Показывать описание",
     "auto_fill_dates": "Автозаполнение дат",
+}
+
+SETTING_HINTS = {
+    "request_price_buy": "При добавлении одной фигурки спрашивать цену покупки.",
+    "request_price_sale": "При добавлении одной фигурки спрашивать цену продажи.",
+    "show_description": "При добавлении одной фигурки спрашивать описание.",
+    "auto_fill_dates": "Подставлять сегодняшнюю дату, если указана цена.",
 }
 
 TOGGLE_FIELDS = list(RUS_LABELS.keys())

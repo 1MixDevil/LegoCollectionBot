@@ -26,6 +26,8 @@ from app.api.collection import (
 
     fetch_similar_serials,
 
+    figure_exists_in_catalog,
+
 )
 
 from app.content.ui_messages import (
@@ -172,6 +174,42 @@ def _figure_not_found_message(serial: str, detail: str | None = None) -> str:
         return f"❌ {detail}{hint}"
 
     return f"❌ {base}{hint}"
+
+
+
+
+
+async def _reply_serial_not_found(
+    message: types.Message,
+    state: FSMContext,
+    serial: str,
+    *,
+    detail: str | None = None,
+) -> None:
+    """Артикул не в каталоге — подсказки и сохранение FSM для повторного ввода."""
+    suggestions = await fetch_similar_serials(serial, limit=3, threshold=0.1)
+    text = _figure_not_found_message(serial, detail)
+    if suggestions:
+        builder = InlineKeyboardBuilder()
+        for s in suggestions:
+            bid = s.get("bricklink_id", "")
+            name = s.get("name") or bid
+            sim = s.get("similarity", 0) * 100
+            btn_text = f"{name} — {bid} ({sim:.1f}%)"
+            builder.button(text=btn_text, callback_data=f"suggest_choice:{bid}")
+        builder.button(text="↩️ В главное меню", callback_data="suggest_cancel")
+        builder.adjust(1)
+        await message.answer(
+            text + "\n\nВозможно, вы имели в виду:",
+            parse_mode="HTML",
+            reply_markup=builder.as_markup(),
+        )
+    else:
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=prompt_kb(back="add"),
+        )
 
 
 
@@ -451,7 +489,9 @@ async def cb_add_solo(call: types.CallbackQuery, state: FSMContext):
 
         call,
 
-        "Введите артикул (bricklink_id) фигурки:",
+        "Введите артикул BrickLink (например <code>sw0001a</code>):",
+
+        parse_mode="HTML",
 
         reply_markup=prompt_kb(back="add"),
 
@@ -582,6 +622,40 @@ async def add_serial(message: types.Message, state: FSMContext):
         )
 
         await state.clear()
+
+        return
+
+
+
+    try:
+
+        if not await figure_exists_in_catalog(tg_id, serial):
+
+            await _reply_serial_not_found(message, state, serial)
+
+            return
+
+    except HTTPStatusError as e:
+
+        await message.answer(
+
+            f"Ошибка проверки каталога ({e.response.status_code}). Попробуйте позже.",
+
+            reply_markup=prompt_kb(back="add"),
+
+        )
+
+        return
+
+    except Exception:
+
+        await message.answer(
+
+            "Не удалось проверить артикул. Попробуйте позже.",
+
+            reply_markup=prompt_kb(back="add"),
+
+        )
 
         return
 
@@ -918,7 +992,7 @@ async def finish_add_figure(message: types.Message, state: FSMContext):
 
         await message.answer(
 
-            f"Не удалось добавить фигурку. Попробуйте позже.\n({type(e).__name__})",
+            f"Не удалось добавить фигурку. Попробуйте позже.",
 
             reply_markup=await _main_kb(message.from_user.id),
 
