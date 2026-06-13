@@ -41,7 +41,7 @@ from app.keyboards.main import add_choice_kb, prompt_kb
 from app.states.figures import AddFigureState, BulkAddState
 
 from app.utils.message import answer_callback, safe_edit_or_answer
-from app.utils.serial_parse import parse_serial_list
+from app.utils.serial_parse import invalid_serial_tokens, parse_serial_list
 
 
 
@@ -512,9 +512,9 @@ async def cb_add_few(call: types.CallbackQuery, state: FSMContext):
 
         call,
 
-        "Введите артикулы через <b>пробел</b>, запятую или «;» "
-        "(например <code>sw0001a sw0002</code>), либо отправьте .txt файл "
-        "(по одному артикулу в строке):",
+        "Введите артикулы через <b>пробел</b>, запятую или «;».\n"
+        "Примеры: <code>sw0001a sw0002</code>, <code>sh0689 85863pb101</code>.\n"
+        "Или отправьте .txt (по одному артикулу в строке).",
 
         parse_mode="HTML",
 
@@ -588,12 +588,15 @@ async def add_many_serials(message: types.Message, state: FSMContext):
 
     serials = _parse_serials_from_text(message.text)
     if serials is None:
-        await message.answer(
+        bad = invalid_serial_tokens(message.text or "")
+        hint = (
             "Каждый артикул — отдельное слово BrickLink, например "
-            "<code>sw0001a sw0002</code> или <code>sw0001a, sw0002</code>.",
-            parse_mode="HTML",
-            reply_markup=prompt_kb(back="add"),
+            "<code>sw0001a sh0689</code> или <code>85863pb101 47394pb187</code>."
         )
+        if bad:
+            preview = ", ".join(f"<code>{t}</code>" for t in bad[:5])
+            hint += f"\n\nНе похоже на артикул: {preview}"
+        await message.answer(hint, parse_mode="HTML", reply_markup=prompt_kb(back="add"))
         return
 
     await _process_bulk_serials(message, state, serials)

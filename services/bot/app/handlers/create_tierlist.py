@@ -33,7 +33,7 @@ from app.services.tierlist_title import (
 )
 from app.states.figures import CreateTierList
 from app.utils.message import safe_edit_or_answer
-from app.utils.serial_parse import parse_serial_list
+from app.utils.serial_parse import invalid_serial_tokens, parse_serial_list
 from app.utils.telegram_network import safe_callback_answer
 
 logger = logging.getLogger(__name__)
@@ -164,7 +164,7 @@ PARSE_MODE_FEATURE = {
 MODE_HINTS = {
     "serials": (
         "Введите <b>артикулы</b> через пробел, запятую или «;»:\n"
-        "<code>sw0001a sw0002</code>"
+        "<code>sw0001a sh0689 85863pb101</code>"
     ),
     "keyword": (
         "Введите <b>ключевые слова</b> для поиска по названию:\n"
@@ -446,11 +446,16 @@ async def on_serials_entered(message: types.Message, state: FSMContext):
     if forced_mode == "serials":
         parsed = parse_serials_only(message.text)
         if not parsed:
-            await message.answer(
-                "Только артикулы BrickLink (например <code>sw0001a</code>).",
-                parse_mode="HTML",
-                reply_markup=nav_kb(),
+            bad = invalid_serial_tokens(message.text or "")
+            hint = (
+                "Укажите артикулы через пробел или запятую.\n"
+                "Примеры: <code>sw0001a</code>, <code>sh0689</code>, "
+                "<code>85863pb101</code>, <code>47394pb187</code>."
             )
+            if bad:
+                preview = ", ".join(f"<code>{t}</code>" for t in bad[:5])
+                hint += f"\n\nНе похоже на артикул: {preview}"
+            await message.answer(hint, parse_mode="HTML", reply_markup=nav_kb())
             return
     elif forced_mode == "keyword":
         kw = message.text.strip()
