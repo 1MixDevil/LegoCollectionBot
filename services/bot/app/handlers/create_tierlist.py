@@ -25,6 +25,11 @@ from app.services.collage_limits import (
     should_send_in_batches,
     tierlist_max_figures,
 )
+from app.services.tierlist_title import (
+    TIERLIST_TITLE_MAX,
+    looks_like_serial_list,
+    normalize_tierlist_title,
+)
 from app.states.figures import CreateTierList
 from app.utils.serial_parse import parse_serial_list
 from app.utils.telegram_network import safe_callback_answer
@@ -138,8 +143,11 @@ def _dedupe_records_with_counts(records: list[dict]) -> tuple[list[dict], list[s
     for rec in uniq:
         bid = (rec.get("bricklink_id") or "").strip().lower()
         cnt = counts.get(bid, 1)
-        rec["display_id"] = f"{bid} x{cnt}" if cnt > 1 else bid
-    duplicates = [f"{bid} x{cnt}" for bid, cnt in counts.items() if cnt > 1]
+        if cnt > 1:
+            rec["repeat_count"] = cnt
+        else:
+            rec.pop("repeat_count", None)
+    duplicates = [f"{bid} ×{cnt}" for bid, cnt in counts.items() if cnt > 1]
     return uniq, duplicates
 
 
@@ -202,11 +210,12 @@ async def _deliver_tierlist(
         preview = ", ".join(duplicates[:10])
         more = "" if len(duplicates) <= 10 else f" (+{len(duplicates) - 10})"
         await message.answer(
-            "ℹ️ Повторы в tier-листе объединены:\n"
+            "ℹ️ Повторы в tier-листе (на коллаже — <b>×N</b> у артикула):\n"
             f"<code>{preview}{more}</code>",
             parse_mode="HTML",
         )
-        caption_label = (caption_label + "; " if caption_label else "") + "повторы объединены"
+
+    title = normalize_tierlist_title(title, figure_count=len(records))
 
     role = await get_user_role(telegram_id)
     records, dropped = cap_tierlist_records(records, role)
@@ -296,18 +305,34 @@ async def cb_start_tierlist(call: types.CallbackQuery, state: FSMContext):
         await _notify_stale_button(call, "Это старое меню.")
         return
     await call.message.answer(
-        "Введите название вашего Tier List.\n"
-        "Если не нужно — отправьте `null`.",
-        parse_mode="Markdown",
+        f"Введите название tier‑листа (до <b>{TIERLIST_TITLE_MAX}</b> символов).\n"
+        "Короткое имя — на коллаже и в подписи к файлу.\n"
+        "Если не нужно — отправьте <code>null</code>.\n\n"
+        "<i>Не вставляйте сюда список артикулов — их введёте на следующем шаге.</i>",
+        parse_mode="HTML",
     )
     await state.set_state(CreateTierList.waiting_name_list)
 
 
 @router.message(CreateTierList.waiting_name_list)
 async def on_name_entered(message: types.Message, state: FSMContext):
-    name = message.text.strip()
+    name = (message.text or "").strip()
     if name.lower() == "null":
         name = None
+    elif looks_like_serial_list(name):
+        await message.answer(
+            "Похоже на список артикулов. Введите <b>короткое название</b> "
+            f"(до {TIERLIST_TITLE_MAX} символов) или <code>null</code>.",
+            parse_mode="HTML",
+        )
+        return
+    elif name and len(name) > TIERLIST_TITLE_MAX:
+        await message.answer(
+            f"Слишком длинное название ({len(name)} симв.). "
+            f"Максимум <b>{TIERLIST_TITLE_MAX}</b>.",
+            parse_mode="HTML",
+        )
+        return
     await state.update_data(title=name)
     role = await get_user_role(str(message.from_user.id))
 

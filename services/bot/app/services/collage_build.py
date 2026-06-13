@@ -15,6 +15,7 @@ from app.services.collage_config import (
     TMP_DIR,
     output_paths,
 )
+from app.services.tierlist_title import normalize_tierlist_title
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,11 @@ def build_caption(
 ) -> str:
     from app.services.collage_config import owned_stats_caption
 
-    caption = f"{caption_prefix} {title or ''} готов!".strip()
+    short_title = normalize_tierlist_title(title, figure_count=len(records))
+    if short_title:
+        caption = f"{caption_prefix} «{short_title}» готов!"
+    else:
+        caption = f"{caption_prefix} готов!"
     if caption_extra:
         caption += f" ({caption_extra})"
     caption += owned_stats_caption(records, owned_ids)
@@ -42,7 +47,8 @@ def sync_build_collage(
     *,
     owned_ids: frozenset[str] | None = None,
 ) -> tuple[str, str] | None:
-    path, base_name = output_paths(telegram_id, title)
+    collage_title = normalize_tierlist_title(title, figure_count=len(records))
+    path, base_name = output_paths(telegram_id, collage_title)
     os.makedirs(TMP_DIR, exist_ok=True)
     placed = asyncio.run(
         StarWarsCollageGenerator.build_collage_to_file(
@@ -52,7 +58,7 @@ def sync_build_collage(
             prefix_url=PREFIX_URL,
             min_height=COLLAGE_MIN_HEIGHT,
             columns=COLLAGE_COLUMNS,
-            title=title or None,
+            title=collage_title or None,
             max_connections=CONCURRENT_BATCHES,
             owned_ids=owned_ids,
         )

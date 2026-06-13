@@ -95,6 +95,50 @@ class StarWarsCollageGenerator:
         return resized
 
     @staticmethod
+    def _draw_cell_label(
+        draw: ImageDraw.ImageDraw,
+        canvas_width: int,
+        id_val: str,
+        *,
+        repeat_count: int | None,
+        font_path: str,
+        base_font_size: int,
+    ) -> None:
+        """Артикул + ×N: подбирает размер шрифта, чтобы текст не обрезался."""
+        margin = 10
+        max_w = max(40, canvas_width - margin * 2)
+        y = 10
+        count = repeat_count if repeat_count and repeat_count > 1 else None
+
+        for size in range(base_font_size, 28, -4):
+            id_font = StarWarsCollageGenerator.load_font(font_path, size)
+            id_bbox = draw.textbbox((0, 0), id_val, font=id_font)
+            id_w = id_bbox[2] - id_bbox[0]
+            suffix = f" ×{count}" if count else ""
+            suffix_w = 0
+            suffix_font = id_font
+            if count:
+                suffix_size = max(24, int(size * 0.72))
+                suffix_font = StarWarsCollageGenerator.load_font(font_path, suffix_size)
+                sb = draw.textbbox((0, 0), suffix, font=suffix_font)
+                suffix_w = sb[2] - sb[0]
+            if id_w + suffix_w <= max_w:
+                draw.text((margin, y), id_val, font=id_font, fill="black")
+                if count:
+                    draw.text(
+                        (margin + id_w, y + max(0, (id_bbox[3] - id_bbox[1]) // 6)),
+                        suffix,
+                        font=suffix_font,
+                        fill="black",
+                    )
+                return
+
+        short = id_val if len(id_val) <= 10 else id_val[:9] + "…"
+        small = StarWarsCollageGenerator.load_font(font_path, 28)
+        label = f"{short}×{count}" if count else short
+        draw.text((margin, y), label, font=small, fill="black")
+
+    @staticmethod
     def _draw_owned_mark(
         draw: ImageDraw.ImageDraw, width: int, height: int, pad_top: int
     ) -> None:
@@ -113,10 +157,11 @@ class StarWarsCollageGenerator:
     def _prepare_image_from_bytes(
         content: bytes,
         id_val: str,
-        display_text: str,
         min_height: int,
-        id_font,
+        font_path: str,
+        font_size: int,
         owned_ids: frozenset[str] | None = None,
+        repeat_count: int | None = None,
     ) -> Image.Image | None:
         try:
             img = Image.open(BytesIO(content)).convert("RGBA")
@@ -130,7 +175,14 @@ class StarWarsCollageGenerator:
             img.close()
 
             draw = ImageDraw.Draw(canvas)
-            draw.text((10, 10), display_text, font=id_font, fill="black")
+            StarWarsCollageGenerator._draw_cell_label(
+                draw,
+                canvas.width,
+                id_val,
+                repeat_count=repeat_count,
+                font_path=font_path,
+                base_font_size=font_size,
+            )
             if owned_ids and id_val.lower() in owned_ids:
                 StarWarsCollageGenerator._draw_owned_mark(
                     draw, canvas.width, canvas.height, pad_top
@@ -162,7 +214,6 @@ class StarWarsCollageGenerator:
 
         prefix = prefix_url.rstrip("/")
         headers = {"User-Agent": user_agent}
-        id_font = cls.load_font(font_path, font_size)
         semaphore = asyncio.Semaphore(max_connections)
 
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -171,7 +222,12 @@ class StarWarsCollageGenerator:
                 id_val = str(row.get(id_key, "")).strip()
                 if not id_val:
                     return None
-                display_text = str(row.get("display_id") or id_val).strip()
+                repeat_raw = row.get("repeat_count")
+                repeat_count = (
+                    int(repeat_raw)
+                    if repeat_raw is not None and int(repeat_raw) > 1
+                    else None
+                )
                 url = f"{prefix}/{id_val}.png"
                 try:
                     async with semaphore:
@@ -182,10 +238,11 @@ class StarWarsCollageGenerator:
                         cls._prepare_image_from_bytes,
                         content,
                         id_val,
-                        display_text,
                         min_height,
-                        id_font,
+                        font_path,
+                        font_size,
                         owned_ids,
+                        repeat_count,
                     )
                 except Exception:
                     logger.debug("fetch failed %s", url, exc_info=True)
@@ -219,15 +276,18 @@ class StarWarsCollageGenerator:
         title_font = None
         bbox = None
         if title:
-            title_font = StarWarsCollageGenerator.load_font(
-                font_path, int(font_size * 1.5)
-            )
-            dummy = Image.new("RGB", (1, 1))
-            draw = ImageDraw.Draw(dummy)
-            bbox = draw.textbbox((0, 0), title, font=title_font)
+            canvas_w = w * columns
+            for tsize in range(int(font_size * 1.5), 36, -6):
+                title_font = StarWarsCollageGenerator.load_font(font_path, tsize)
+                dummy = Image.new("RGB", (1, 1))
+                draw_m = ImageDraw.Draw(dummy)
+                bbox = draw_m.textbbox((0, 0), title, font=title_font)
+                text_w = bbox[2] - bbox[0]
+                dummy.close()
+                if text_w <= canvas_w - 40:
+                    break
             text_height = bbox[3] - bbox[1]
             title_padding = text_height + 80
-            dummy.close()
 
         collage = Image.new(
             "RGB", (w * columns, h * rows_n + title_padding), "white"
@@ -235,7 +295,7 @@ class StarWarsCollageGenerator:
 
         if title and title_font and bbox:
             draw = ImageDraw.Draw(collage)
-            x = (collage.width - (bbox[2] - bbox[0])) // 2
+            x = max(10, (collage.width - (bbox[2] - bbox[0])) // 2)
             draw.text((x, 10), title, font=title_font, fill="black")
 
         logger.info(

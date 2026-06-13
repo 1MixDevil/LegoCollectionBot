@@ -57,7 +57,8 @@ def _with_counts(records: list[dict]) -> list[dict]:
     for bid in ordered:
         item = first[bid]
         item["count"] = counts[bid]
-        item["display_id"] = f"{bid} x{counts[bid]}" if counts[bid] > 1 else bid
+        if counts[bid] > 1:
+            item["repeat_count"] = counts[bid]
         out.append(item)
     return out
 

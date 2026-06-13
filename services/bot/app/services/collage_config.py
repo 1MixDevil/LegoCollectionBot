@@ -18,7 +18,7 @@ CONCURRENT_BATCHES = max(1, int(os.getenv("CONCURRENT_BATCHES", "4")))
 
 
 def output_paths(telegram_id: str, title: str) -> tuple[str, str]:
-    safe_title = re.sub(r'[<>:"/\\|?*]', "_", title or "")[:80]
+    safe_title = re.sub(r'[<>:"/\\|?*]', "_", title or "")[:40]
     base_name = f"collage_{telegram_id}"
     if safe_title:
         base_name += f"_{safe_title}"
