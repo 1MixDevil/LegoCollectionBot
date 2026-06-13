@@ -17,6 +17,13 @@ from app.services.collage_limits import (
     COLLAGE_BATCH_SIZE,
     should_send_in_batches,
 )
+from app.services.tierlist_daily_limit import (
+    format_limit_accept_hint,
+    format_limit_denied_message,
+    get_tierlist_usage,
+    try_consume_tierlist,
+)
+from app.core.access import get_user_role
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +84,17 @@ async def generate_and_send_collage(
         )
         return False
 
+    role = await get_user_role(telegram_id)
+    allowed, used, limit = try_consume_tierlist(telegram_id, role)
+    if not allowed:
+        used_today, _ = get_tierlist_usage(telegram_id, role)
+        await message.answer(
+            format_limit_denied_message(used_today, limit or 0),
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+        return False
+
     parts = _parts_from_records(
         records, title, caption_prefix, caption_extra, owned_ids
     )
@@ -91,6 +109,9 @@ async def generate_and_send_collage(
         parse_mode="HTML",
         reply_markup=reply_markup,
     )
+    hint = format_limit_accept_hint(used, limit)
+    if hint:
+        await message.answer(hint, parse_mode="HTML")
     if len(parts) > 1:
         await message.answer(
             f"📦 Большой список: <b>{len(parts)}</b> файлов "

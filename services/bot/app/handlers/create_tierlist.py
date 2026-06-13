@@ -26,6 +26,7 @@ from app.services.collage_limits import (
     should_send_in_batches,
     tierlist_max_figures,
 )
+from app.services.tierlist_daily_limit import get_tierlist_usage
 from app.services.tierlist_title import (
     TIERLIST_TITLE_MAX,
     looks_like_serial_list,
@@ -89,11 +90,19 @@ async def cb_tierlist_menu(call: types.CallbackQuery, state: FSMContext) -> None
         return
     await state.clear()
     await call.answer()
-    await safe_edit_or_answer(
-        call.message,
+    telegram_id = str(call.from_user.id)
+    role = await get_user_role(telegram_id)
+    used, limit = get_tierlist_usage(telegram_id, role)
+    text = (
         "🖼 <b>Коллаж</b>\n\n"
         "• <b>Создать коллаж</b> — выбрать фигурки и собрать tier‑лист.\n"
-        "• <b>Коллаж коллекции</b> — все фигурки из вашей коллекции.",
+        "• <b>Коллаж коллекции</b> — все фигурки из вашей коллекции."
+    )
+    if limit is not None:
+        text += f"\n\n📊 Сегодня: <b>{used}/{limit}</b> коллажей (лимит в сутки)."
+    await safe_edit_or_answer(
+        call.message,
+        text,
         parse_mode="HTML",
         reply_markup=tierlist_menu_kb(),
     )
