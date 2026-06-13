@@ -101,6 +101,9 @@ def tierlist_mode_kb(role: str) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(text=BACK_LABEL, callback_data="tierlist_back_name")])
     rows.append([InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def tierlist_menu_kb() -> InlineKeyboardMarkup:
     """Подменю коллажей."""
     return InlineKeyboardMarkup(
         inline_keyboard=[

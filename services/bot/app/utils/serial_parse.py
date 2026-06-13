@@ -10,16 +10,17 @@ SERIAL_RE = re.compile(r"^[a-z][a-z0-9]*\d+[a-z]?$", re.IGNORECASE)
 
 def parse_serial_list(text: str) -> list[str] | None:
     """
-    Список артикулов только если разделены «,» или «;» и каждый токен — артикул.
+    Список артикулов, если токены разделены «,», «;» или пробелами
+    и каждый токен — артикул BrickLink.
     Один артикул без разделителей — один элемент.
-    Иначе None (фраза целиком, не дробить по пробелам).
+    Иначе None (поиск по названию целиком).
     """
     text = text.strip()
     if not text:
         return []
 
-    if re.search(r"[,;]", text):
-        tokens = [t.strip() for t in re.split(r"[,;]+", text) if t.strip()]
+    if re.search(r"[,;\s]", text):
+        tokens = [t.strip() for t in re.split(r"[,;\s]+", text) if t.strip()]
         if tokens and all(SERIAL_RE.match(t) for t in tokens):
             return [t.lower() for t in tokens]
         return None

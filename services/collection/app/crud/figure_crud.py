@@ -141,13 +141,31 @@ def get_user_figure_record(
         )
     return rec
 
-def update_user_figure(db: Session, rec_id: int, data: FigureToUserUpdate) -> FigureToUser:
-    rec = get_user_figure_record(db, rec_id)
-    for field, val in data.dict(exclude_none=True).items():
+
+def get_user_figure_by_id(db: Session, rec_id: int) -> FigureToUser:
+    rec = db.query(FigureToUser).get(rec_id)
+    if not rec:
+        raise NoResultFound(f"FigureToUser id={rec_id} not found")
+    return rec
+
+
+def update_user_figure(db: Session, rec_id: int, data: FigureToUserUpdate) -> FigureToUserRead:
+    rec = get_user_figure_by_id(db, rec_id)
+    patch = data.dict(exclude_unset=True)
+    for field, val in patch.items():
         setattr(rec, field, val)
     db.commit()
     db.refresh(rec)
-    return rec
+    return FigureToUserRead(
+        id=rec.id,
+        bricklink_id=rec.figure.bricklink_id,
+        name=rec.figure.name,
+        price_buy=float(rec.price_buy) if rec.price_buy is not None else None,
+        price_sale=float(rec.price_sale) if rec.price_sale is not None else None,
+        description=rec.description,
+        buy_date=rec.buy_date,
+        sale_date=rec.sale_date,
+    )
 
 def delete_user_figure(db: Session, user_id: int, bricklink_id: str) -> None:
     rec = get_user_figure_record(db, user_id, bricklink_id)

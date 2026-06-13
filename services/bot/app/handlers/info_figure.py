@@ -31,8 +31,8 @@ FIGURE_CARD_PROMPT = (
     "ℹ️ <b>Карточка фигурки</b>\n\n"
     "Введите <b>артикул BrickLink</b> (например <code>sw0001a</code>) "
     "или <b>название</b> — фото, цены и ваши записи в коллекции.\n\n"
-    "<i>Несколько артикулов — через запятую: "
-    "<code>sw0001a, sw0002</code>.\n"
+    "<i>Несколько артикулов — через пробел или запятую: "
+    "<code>sw0001a sw0002</code>.\n"
     "По фото — раздел «🔎 Поиск по фото».</i>"
 )
 
@@ -69,16 +69,15 @@ def _edit_field_kb(
     all_records: bool = False,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    prefix = "info_edit_field_all" if all_records else "info_edit_field"
     for field, label in (
         ("price_buy", "💵 Цена покупки"),
         ("price_sale", "💰 Цена продажи"),
         ("description", "📝 Описание"),
     ):
         if all_records:
-            cb = f"{prefix}:{field}:{serial}"
+            cb = f"info_edit_all_field:{field}:{serial}"
         else:
-            cb = f"{prefix}:{field}:{rec_id}:{serial}"
+            cb = f"info_edit_field:{field}:{rec_id}:{serial}"
         builder.button(text=label, callback_data=cb)
     builder.button(text=MAIN_MENU_LABEL, callback_data="cancel")
     builder.adjust(1)
@@ -265,6 +264,7 @@ async def cb_info_actions(call: types.CallbackQuery, state: FSMContext):
     telegram_id = str(call.from_user.id)
 
     if action == "edit":
+        await call.answer()
         try:
             matches = await _records_for_serial(telegram_id, serial)
         except Exception:
@@ -341,6 +341,30 @@ async def cb_info_edit_pick(call: types.CallbackQuery, state: FSMContext) -> Non
     )
 
 
+@router.callback_query(
+    lambda cb: cb.data
+    and cb.data.startswith("info_edit_all_field:")
+)
+async def cb_info_edit_field_all(call: types.CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    parts = call.data.split(":", 2)
+    if len(parts) != 3:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+    _, field, serial = parts
+    if field not in {"price_buy", "price_sale", "description"}:
+        await call.answer("Некорректные данные.", show_alert=True)
+        return
+    await state.update_data(
+        info_edit_rec_id=None,
+        info_edit_field=field,
+        info_edit_serial=serial,
+        info_edit_all=True,
+    )
+    await state.set_state(InfoFigures.waiting_edit_value)
+    await _send_edit_prompt(call.message, field, all_records=True)
+
+
 @router.callback_query(lambda cb: cb.data and cb.data.startswith("info_edit_field:"))
 async def cb_info_edit_field(call: types.CallbackQuery, state: FSMContext) -> None:
     await call.answer()
@@ -361,27 +385,6 @@ async def cb_info_edit_field(call: types.CallbackQuery, state: FSMContext) -> No
     )
     await state.set_state(InfoFigures.waiting_edit_value)
     await _send_edit_prompt(call.message, field)
-
-
-@router.callback_query(lambda cb: cb.data and cb.data.startswith("info_edit_field_all:"))
-async def cb_info_edit_field_all(call: types.CallbackQuery, state: FSMContext) -> None:
-    await call.answer()
-    parts = call.data.split(":")
-    if len(parts) != 4:
-        await call.answer("Некорректные данные.")
-        return
-    _, _, field, serial = parts
-    if field not in {"price_buy", "price_sale", "description"}:
-        await call.answer("Некорректные данные.")
-        return
-    await state.update_data(
-        info_edit_rec_id=None,
-        info_edit_field=field,
-        info_edit_serial=serial,
-        info_edit_all=True,
-    )
-    await state.set_state(InfoFigures.waiting_edit_value)
-    await _send_edit_prompt(call.message, field, all_records=True)
 
 
 async def _send_edit_prompt(
@@ -462,8 +465,18 @@ async def on_info_edit_value(message: types.Message, state: FSMContext) -> None:
         else:
             await update_user_figure_record(int(rec_id), **payload)
             await message.answer("✅ Изменения сохранены. Обновляю карточку…")
-    except HTTPStatusError:
-        await message.answer("Не удалось сохранить изменения.", reply_markup=nav_kb())
+    except HTTPStatusError as e:
+        detail = "Не удалось сохранить изменения."
+        if e.response.status_code == 422:
+            try:
+                body = e.response.json()
+                if isinstance(body.get("detail"), list) and body["detail"]:
+                    detail += f"\n{body['detail'][0].get('msg', '')}"
+                elif isinstance(body.get("detail"), str):
+                    detail += f"\n{body['detail']}"
+            except Exception:
+                pass
+        await message.answer(detail, reply_markup=nav_kb())
         return
     except Exception:
         await message.answer(

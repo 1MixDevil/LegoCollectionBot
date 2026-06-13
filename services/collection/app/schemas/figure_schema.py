@@ -79,11 +79,11 @@ class FigureToUserCreate(BaseModel):
     sale_date: Optional[date] = None
 
 class FigureToUserUpdate(BaseModel):
-    price_buy: Optional[float]
-    price_sale: Optional[float]
-    description: Optional[str]
-    buy_date: Optional[date]
-    sale_date: Optional[date]
+    price_buy: Optional[float] = None
+    price_sale: Optional[float] = None
+    description: Optional[str] = None
+    buy_date: Optional[date] = None
+    sale_date: Optional[date] = None
 
 class FigureToUserReadFull(FigureToUserRead):
     figure: FigureRead

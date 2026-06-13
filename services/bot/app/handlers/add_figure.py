@@ -41,6 +41,7 @@ from app.keyboards.main import add_choice_kb, prompt_kb
 from app.states.figures import AddFigureState, BulkAddState
 
 from app.utils.message import answer_callback, safe_edit_or_answer
+from app.utils.serial_parse import parse_serial_list
 
 
 
@@ -109,9 +110,9 @@ def _parse_optional_price(value) -> float | None:
 
 
 
-def _parse_serials_from_text(text: str) -> list[str]:
-
-    return [s.strip().lower() for s in re.split(r"[,;\s]+", text) if s.strip()]
+def _parse_serials_from_text(text: str) -> list[str] | None:
+    """Артикулы через пробел, запятую или «;»."""
+    return parse_serial_list(text)
 
 
 def _bulk_entry_dates(settings: dict) -> tuple[str | None, str | None]:
@@ -511,8 +512,11 @@ async def cb_add_few(call: types.CallbackQuery, state: FSMContext):
 
         call,
 
-        "Введите артикулы через запятую или «;», либо отправьте .txt файл "
-        "(по одному артикулу в строке или через запятую):",
+        "Введите артикулы через <b>пробел</b>, запятую или «;» "
+        "(например <code>sw0001a sw0002</code>), либо отправьте .txt файл "
+        "(по одному артикулу в строке):",
+
+        parse_mode="HTML",
 
         reply_markup=prompt_kb(back="add"),
 
@@ -552,6 +556,13 @@ async def add_many_from_file(message: types.Message, state: FSMContext):
     text = buf.getvalue().decode("utf-8", errors="ignore")
 
     serials = _parse_serials_from_text(text)
+    if serials is None:
+        await message.answer(
+            "В файле должны быть артикулы BrickLink — по одному в строке "
+            "или через пробел/запятую.",
+            reply_markup=prompt_kb(back="add"),
+        )
+        return
 
     await _process_bulk_serials(message, state, serials)
 
@@ -576,6 +587,14 @@ async def add_many_serials(message: types.Message, state: FSMContext):
         return
 
     serials = _parse_serials_from_text(message.text)
+    if serials is None:
+        await message.answer(
+            "Каждый артикул — отдельное слово BrickLink, например "
+            "<code>sw0001a sw0002</code> или <code>sw0001a, sw0002</code>.",
+            parse_mode="HTML",
+            reply_markup=prompt_kb(back="add"),
+        )
+        return
 
     await _process_bulk_serials(message, state, serials)
 
