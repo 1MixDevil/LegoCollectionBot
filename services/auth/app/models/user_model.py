@@ -34,6 +34,8 @@ class UserSettings(Base):
     is_seller           = Column(Boolean, default=True)  # Является продавцом?
     show_description    = Column(Boolean, default=True)   # Показывать описание?
     auto_fill_dates     = Column(Boolean, default=True)  # Автоматически проставлять даты?
+    wishlist_public     = Column(Boolean, default=False, server_default="false")
+    wishlist_share_token = Column(String(32), unique=True, nullable=True, index=True)
 
     # Обратная связь с User
     user = relationship("User", back_populates="settings")

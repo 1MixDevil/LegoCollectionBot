@@ -11,6 +11,8 @@ from app.schemas.user_schema import (
     UserSettingsRead,
     UserSettingsUpdate,
     UserUpdate,
+    WishlistShareSettingsRead,
+    PublicWishlistOwnerRead,
 )
 from app.crud.user_crud import (
     create_user,
@@ -21,6 +23,11 @@ from app.crud.user_crud import (
     add_group_to_user,
     remove_group_from_user,
     set_user_role,
+    get_wishlist_share_settings,
+    set_wishlist_public,
+    get_public_owner_by_token,
+    list_public_wishlist_owners,
+    is_wishlist_public,
 )
 from app.models.user_model import User, UserSettings
 
@@ -179,4 +186,87 @@ async def get_user_settings(
         is_seller=settings.is_seller,
         show_description=settings.show_description,
         auto_fill_dates=settings.auto_fill_dates,
+        wishlist_public=settings.wishlist_public,
+        wishlist_share_token=settings.wishlist_share_token,
     )
+
+
+@router.get(
+    "/wishlist-share/telegram/{telegram_username}",
+    response_model=WishlistShareSettingsRead,
+)
+def read_wishlist_share_settings(
+    telegram_username: str,
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.telegram_username == telegram_username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    settings = get_wishlist_share_settings(db, user)
+    return WishlistShareSettingsRead(
+        user_id=user.id,
+        username=user.username,
+        wishlist_public=bool(settings.wishlist_public),
+        wishlist_share_token=settings.wishlist_share_token,
+    )
+
+
+@router.put(
+    "/wishlist-share/telegram/{telegram_username}",
+    response_model=WishlistShareSettingsRead,
+)
+def update_wishlist_share_settings(
+    telegram_username: str,
+    public: bool,
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.telegram_username == telegram_username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    settings = set_wishlist_public(db, user, public)
+    return WishlistShareSettingsRead(
+        user_id=user.id,
+        username=user.username,
+        wishlist_public=bool(settings.wishlist_public),
+        wishlist_share_token=settings.wishlist_share_token,
+    )
+
+
+@router.get(
+    "/wishlist-share/by-token/{token}",
+    response_model=WishlistShareSettingsRead,
+)
+def read_wishlist_by_share_token(token: str, db: Session = Depends(get_db)):
+    try:
+        user = get_public_owner_by_token(db, token)
+    except NoResultFound:
+        raise HTTPException(status_code=404, detail="Shared wishlist not found or private")
+    settings = get_wishlist_share_settings(db, user)
+    return WishlistShareSettingsRead(
+        user_id=user.id,
+        username=user.username,
+        wishlist_public=True,
+        wishlist_share_token=settings.wishlist_share_token,
+    )
+
+
+@router.get(
+    "/wishlist-share/public-owners/",
+    response_model=List[PublicWishlistOwnerRead],
+)
+def read_public_wishlist_owners(db: Session = Depends(get_db)):
+    owners = list_public_wishlist_owners(db)
+    return [
+        PublicWishlistOwnerRead(user_id=u.id, username=u.username)
+        for u in owners
+    ]
+
+
+@router.get(
+    "/wishlist-share/public-check/{user_id}",
+    status_code=status.HTTP_200_OK,
+)
+def check_wishlist_public(user_id: int, db: Session = Depends(get_db)):
+    if not is_wishlist_public(db, user_id):
+        raise HTTPException(status_code=403, detail="Wishlist is private")
+    return {"public": True}

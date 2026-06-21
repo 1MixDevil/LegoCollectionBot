@@ -10,10 +10,18 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile
 from httpx import HTTPStatusError
 
+from app.api.auth import (
+    check_wishlist_public,
+    get_wishlist_owner_by_token,
+    get_wishlist_share_settings,
+    list_public_wishlist_owners,
+    set_wishlist_public,
+)
 from app.api.collection import (
     create_wishlist_item,
     delete_wishlist_item,
     list_user_wishlist,
+    list_wishlist_by_user_id,
     update_wishlist_item,
 )
 from app.core.access import ensure_access
@@ -22,6 +30,9 @@ from app.keyboards.wishlist import (
     wishlist_item_kb,
     wishlist_list_kb,
     wishlist_menu_kb,
+    wishlist_public_item_kb,
+    wishlist_public_list_kb,
+    wishlist_public_users_kb,
     wishlist_skip_kb,
 )
 from app.states.figures import WishlistState
@@ -33,6 +44,38 @@ router = Router()
 
 URL_RE = re.compile(r"^https?://", re.I)
 SKIP_WORDS = frozenset({"-", "пропустить", "skip", "null"})
+WISHLIST_START_PREFIX = "wl_"
+
+
+def _display_name(username: str | None, user_id: int) -> str:
+    return (username or f"Пользователь #{user_id}").strip()
+
+
+async def _load_share_settings(telegram_id: str) -> dict:
+    try:
+        return await get_wishlist_share_settings(telegram_id)
+    except Exception:
+        logger.exception("wishlist share settings failed")
+        return {"wishlist_public": False, "wishlist_share_token": None}
+
+
+async def _menu_kb(telegram_id: str):
+    settings = await _load_share_settings(telegram_id)
+    return wishlist_menu_kb(is_public=bool(settings.get("wishlist_public")))
+
+
+def _menu_text(is_public: bool) -> str:
+    visibility = (
+        "🔓 <b>Список открытый</b> — можно поделиться ссылкой."
+        if is_public
+        else "🔒 <b>Список закрытый</b> — видите только вы."
+    )
+    return (
+        "💫 <b>Желания</b>\n\n"
+        f"{visibility}\n\n"
+        "Храните наборы и фигурки, которые хотите купить: "
+        "название, описание, цена и ссылка."
+    )
 
 
 def _format_money(value) -> str:
@@ -87,10 +130,16 @@ async def _show_wishlist_item(
     message: types.Message,
     item: dict,
     item_id: int,
+    *,
+    owner_id: int | None = None,
+    readonly: bool = False,
 ) -> None:
     """Карточка желания: фото (если нашли) + подпись."""
     caption = _format_item(item)
-    kb = wishlist_item_kb(item_id)
+    if readonly and owner_id is not None:
+        kb = wishlist_public_item_kb(owner_id)
+    else:
+        kb = wishlist_item_kb(item_id)
     loading = await message.answer("⏳ Открываем…")
     try:
         image_bytes, filename = await fetch_wishlist_image(item)
@@ -119,17 +168,93 @@ async def _show_wishlist_item(
     )
 
 
-async def _show_menu(target: types.Message, *, edit: bool = False) -> None:
-    text = (
-        "💫 <b>Желания</b>\n\n"
-        "Здесь можно хранить наборы и фигурки, которые хотите купить.\n"
-        "Для каждой позиции: название, описание, цена и ссылка (Avito и т.п.)."
-    )
-    kb = wishlist_menu_kb()
+async def _show_menu(
+    target: types.Message,
+    telegram_id: str,
+    *,
+    edit: bool = False,
+) -> None:
+    settings = await _load_share_settings(telegram_id)
+    is_public = bool(settings.get("wishlist_public"))
+    text = _menu_text(is_public)
+    kb = wishlist_menu_kb(is_public=is_public)
     if edit and target.text:
         await safe_edit_or_answer(target, text, parse_mode="HTML", reply_markup=kb)
     else:
         await target.answer(text, parse_mode="HTML", reply_markup=kb)
+
+
+async def _load_public_owners(exclude_user_id: int) -> list[dict]:
+    try:
+        owners = await list_public_wishlist_owners()
+    except Exception:
+        logger.exception("list public wishlist owners failed")
+        return []
+
+    result: list[dict] = []
+    for owner in owners:
+        owner_id = int(owner["user_id"])
+        if owner_id == exclude_user_id:
+            continue
+        try:
+            items = await list_wishlist_by_user_id(owner_id)
+        except Exception:
+            logger.debug("wishlist load failed for owner %s", owner_id, exc_info=True)
+            continue
+        if not items:
+            continue
+        result.append(
+            {
+                "user_id": owner_id,
+                "username": owner.get("username"),
+                "count": len(items),
+            }
+        )
+    return result
+
+
+async def open_shared_wishlist_from_start(
+    message: types.Message,
+    state: FSMContext,
+    token: str,
+) -> bool:
+    """Deep link ?start=wl_{token}. Возвращает True, если обработано."""
+    if not await ensure_access(message, "wishlist"):
+        return True
+    token = token.strip()
+    if not token:
+        return False
+    await state.clear()
+    try:
+        owner = await get_wishlist_owner_by_token(token)
+    except Exception:
+        await message.answer(
+            "Ссылка недействительна или список желаний снова закрыт.",
+        )
+        return True
+
+    owner_id = int(owner["user_id"])
+    owner_name = _display_name(owner.get("username"), owner_id)
+    try:
+        items = await list_wishlist_by_user_id(owner_id)
+    except Exception:
+        await message.answer("Не удалось загрузить список желаний.")
+        return True
+
+    if not items:
+        await message.answer(f"У {owner_name} пока пустой список желаний.")
+        return True
+
+    text = (
+        f"💫 <b>Желания</b> — {_display_name(owner.get('username'), owner_id)}\n"
+        f"{len(items)} поз.\n\nВыберите:"
+    )
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=wishlist_public_list_kb(items, owner_id, 0),
+    )
+    return True
 
 
 @router.callback_query(F.data == "wishlist")
@@ -138,7 +263,8 @@ async def cb_wishlist_menu(call: types.CallbackQuery, state: FSMContext) -> None
         return
     await state.clear()
     await call.answer()
-    await _show_menu(call.message, edit=bool(call.message.text))
+    telegram_id = str(call.from_user.id)
+    await _show_menu(call.message, telegram_id, edit=bool(call.message.text))
 
 
 @router.callback_query(F.data.startswith("wishlist_list:"))
@@ -160,7 +286,7 @@ async def cb_wishlist_list(call: types.CallbackQuery, state: FSMContext) -> None
         await safe_edit_or_answer(
             call.message,
             "💫 Список желаний пуст.\n\nНажмите «➕ Добавить».",
-            reply_markup=wishlist_menu_kb(),
+            reply_markup=await _menu_kb(telegram_id),
         )
         return
 
@@ -193,6 +319,147 @@ async def cb_wishlist_view(call: types.CallbackQuery, state: FSMContext) -> None
     await _show_wishlist_item(call.message, item, item_id)
 
 
+@router.callback_query(F.data == "wishlist_toggle_public")
+async def cb_wishlist_toggle_public(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "wishlist"):
+        return
+    await state.clear()
+    telegram_id = str(call.from_user.id)
+    settings = await _load_share_settings(telegram_id)
+    new_public = not bool(settings.get("wishlist_public"))
+    try:
+        settings = await set_wishlist_public(telegram_id, new_public)
+    except Exception:
+        await call.answer("Не удалось изменить режим.", show_alert=True)
+        return
+    await call.answer("Открытый список" if new_public else "Закрытый список")
+    await _show_menu(call.message, telegram_id, edit=bool(call.message.text))
+
+
+@router.callback_query(F.data == "wishlist_share_link")
+async def cb_wishlist_share_link(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "wishlist"):
+        return
+    await call.answer()
+    telegram_id = str(call.from_user.id)
+    settings = await _load_share_settings(telegram_id)
+    if not settings.get("wishlist_public"):
+        await call.message.answer("Сначала сделайте список открытым.")
+        return
+    token = settings.get("wishlist_share_token")
+    if not token:
+        try:
+            settings = await set_wishlist_public(telegram_id, True)
+            token = settings.get("wishlist_share_token")
+        except Exception:
+            await call.message.answer("Не удалось получить ссылку.")
+            return
+    bot_user = await call.bot.get_me()
+    link = f"https://t.me/{bot_user.username}?start={WISHLIST_START_PREFIX}{token}"
+    await call.message.answer(
+        "🔗 <b>Ссылка на ваш список желаний</b>\n\n"
+        f"<code>{link}</code>\n\n"
+        "Пока список открытый — любой с этой ссылкой может его просмотреть.",
+        parse_mode="HTML",
+        reply_markup=await _menu_kb(telegram_id),
+    )
+
+
+@router.callback_query(F.data.startswith("wishlist_public_users:"))
+async def cb_wishlist_public_users(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "wishlist"):
+        return
+    await state.clear()
+    page = int(call.data.split(":", 1)[1])
+    await call.answer()
+    telegram_id = str(call.from_user.id)
+    try:
+        me_id = int((await get_wishlist_share_settings(telegram_id))["user_id"])
+    except Exception:
+        me_id = -1
+    owners = await _load_public_owners(me_id)
+    if not owners:
+        await safe_edit_or_answer(
+            call.message,
+            "🌍 <b>Чужие желания</b>\n\n"
+            "Пока никто не открыл свой список или все списки пустые.\n"
+            "Откройте свой — другие смогут увидеть его здесь.",
+            parse_mode="HTML",
+            reply_markup=await _menu_kb(telegram_id),
+        )
+        return
+    await safe_edit_or_answer(
+        call.message,
+        "🌍 <b>Чужие желания</b>\n\nВыберите человека:",
+        parse_mode="HTML",
+        reply_markup=wishlist_public_users_kb(owners, page),
+    )
+
+
+@router.callback_query(F.data.startswith("wishlist_public_user:"))
+async def cb_wishlist_public_user(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "wishlist"):
+        return
+    await state.clear()
+    _, owner_id_s, page_s = call.data.split(":", 2)
+    owner_id = int(owner_id_s)
+    page = int(page_s)
+    await call.answer()
+    if not await check_wishlist_public(owner_id):
+        await call.message.answer("Этот список желаний снова закрыт.")
+        return
+    try:
+        items = await list_wishlist_by_user_id(owner_id)
+        owners = await list_public_wishlist_owners()
+        owner_info = next((o for o in owners if int(o["user_id"]) == owner_id), None)
+    except Exception:
+        await call.message.answer("Не удалось загрузить список.")
+        return
+    if not items:
+        await call.message.answer("Список пуст.")
+        return
+    name = _display_name(
+        owner_info.get("username") if owner_info else None,
+        owner_id,
+    )
+    await safe_edit_or_answer(
+        call.message,
+        f"💫 <b>Желания</b> — {name}\n{len(items)} поз.\n\nВыберите:",
+        parse_mode="HTML",
+        reply_markup=wishlist_public_list_kb(items, owner_id, page),
+    )
+
+
+@router.callback_query(F.data.startswith("wishlist_public_view:"))
+async def cb_wishlist_public_view(call: types.CallbackQuery, state: FSMContext) -> None:
+    if not await ensure_access(call, "wishlist"):
+        return
+    await state.clear()
+    _, owner_id_s, item_id_s = call.data.split(":", 2)
+    owner_id = int(owner_id_s)
+    item_id = int(item_id_s)
+    await call.answer("Открываем…")
+    if not await check_wishlist_public(owner_id):
+        await call.message.answer("Этот список желаний снова закрыт.")
+        return
+    try:
+        items = await list_wishlist_by_user_id(owner_id)
+    except Exception:
+        await call.message.answer("Ошибка загрузки.")
+        return
+    item = next((x for x in items if x["id"] == item_id), None)
+    if not item:
+        await call.message.answer("Позиция не найдена.")
+        return
+    await _show_wishlist_item(
+        call.message,
+        item,
+        item_id,
+        owner_id=owner_id,
+        readonly=True,
+    )
+
+
 @router.callback_query(F.data == "wishlist_add")
 async def cb_wishlist_add(call: types.CallbackQuery, state: FSMContext) -> None:
     if not await ensure_access(call, "wishlist"):
@@ -215,7 +482,7 @@ async def cb_wishlist_cancel_add(call: types.CallbackQuery, state: FSMContext) -
         return
     await state.clear()
     await call.answer("Отменено")
-    await _show_menu(call.message)
+    await _show_menu(call.message, str(call.from_user.id))
 
 
 async def start_wishlist_from_figure(
@@ -391,9 +658,10 @@ async def cb_wishlist_delete(call: types.CallbackQuery, state: FSMContext) -> No
     except HTTPStatusError:
         await call.message.answer("Не удалось удалить.")
         return
+    telegram_id = str(call.from_user.id)
     await call.message.answer(
         "🗑 Позиция удалена из желаний.",
-        reply_markup=wishlist_menu_kb(),
+        reply_markup=await _menu_kb(telegram_id),
     )
 
 

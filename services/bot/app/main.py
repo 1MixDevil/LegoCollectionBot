@@ -3,7 +3,7 @@ import logging
 import os
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters.command import Command
+from aiogram.filters.command import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BotCommand, Message
 
@@ -24,7 +24,7 @@ from app.handlers.stubs import router as stubs_router
 from app.handlers.update_figures import router as update_figures_router
 from app.handlers.admin_panel import router as admin_panel_router
 from app.handlers.help import router as help_router
-from app.handlers.wishlist import router as wishlist_router
+from app.handlers.wishlist import router as wishlist_router, open_shared_wishlist_from_start
 from app.keyboards.main import prompt_kb
 from app.services.menu import send_main_menu
 from app.states.figures import AddFigureState
@@ -33,7 +33,7 @@ from app.utils.message import answer_callback
 logger = logging.getLogger(__name__)
 
 
-async def cmd_start(message: Message, state: FSMContext) -> None:
+async def cmd_start(message: Message, state: FSMContext, command: CommandObject) -> None:
     await state.clear()
     tg_id = str(message.from_user.id)
     name = message.from_user.first_name or "пользователь"
@@ -43,6 +43,14 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         logger.exception("Failed to register user")
         await message.answer("Ошибка при связывании с сервисом авторизации.")
         return
+
+    payload = (command.args or "").strip()
+    if payload.startswith("wl_"):
+        if await open_shared_wishlist_from_start(message, state, payload[3:]):
+            if not created:
+                kb = await get_main_keyboard(tg_id)
+                await message.answer("Главное меню:", reply_markup=kb)
+            return
 
     if created:
         await message.answer(f"Привет, {name}! Ваш аккаунт создан.")

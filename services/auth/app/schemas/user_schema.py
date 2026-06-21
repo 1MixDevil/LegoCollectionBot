@@ -39,10 +39,29 @@ class UserSettingsUpdate(BaseModel):
     is_seller:          Optional[bool]  = Field(None, example=False)  # Является продавцом?
     show_description:   Optional[bool]  = Field(None, example=False) # Показывать описание?
     auto_fill_dates:    Optional[bool]  = Field(None, example=False)  # Автоматически проставлять даты?
+    wishlist_public:    Optional[bool]  = Field(None, example=False)
+    wishlist_share_token: Optional[str] = None
 
     class Config:
         orm_mode = True
 
+
+class WishlistShareSettingsRead(BaseModel):
+    user_id: int
+    username: Optional[str]
+    wishlist_public: bool
+    wishlist_share_token: Optional[str]
+
+    class Config:
+        orm_mode = True
+
+
+class PublicWishlistOwnerRead(BaseModel):
+    user_id: int
+    username: Optional[str]
+
+    class Config:
+        orm_mode = True
 
 
 class UserSettingsRead(UserSettingsUpdate):

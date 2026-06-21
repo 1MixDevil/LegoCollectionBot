@@ -193,6 +193,10 @@ async def add_figure_to_user_bulk(
 
 async def list_user_wishlist(telegram_id: str) -> list[dict[str, Any]]:
     user_id = await resolve_user_id(telegram_id)
+    return await list_wishlist_by_user_id(user_id)
+
+
+async def list_wishlist_by_user_id(user_id: int) -> list[dict[str, Any]]:
     async with httpx.AsyncClient() as client:
         response = await client.get(f"{COLLECTION_BASE_URL}/wishlist/user/{user_id}/")
         response.raise_for_status()

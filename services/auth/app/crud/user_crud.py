@@ -1,12 +1,14 @@
 from typing import List
 
+import secrets
+
 from fastapi import HTTPException
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session
 
 from app.core.admin_bootstrap import is_permanent_admin, resolve_bootstrap_role
 from app.models.permissions_model import PermissionGroup
-from app.models.user_model import User
+from app.models.user_model import User, UserSettings
 from app.schemas.user_schema import UserCreate, UserUpdate
 
 VALID_ROLES = frozenset({"admin", "member", "premium"})
@@ -110,3 +112,71 @@ def remove_group_from_user(db: Session, user_id: int, group_id: int) -> User:
     db.commit()
     db.refresh(user)
     return user
+
+
+def _get_or_create_settings(db: Session, user_id: int) -> UserSettings:
+    settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+    if settings:
+        return settings
+    settings = UserSettings(user_id=user_id)
+    db.add(settings)
+    db.commit()
+    db.refresh(settings)
+    return settings
+
+
+def _generate_share_token(db: Session) -> str:
+    for _ in range(10):
+        token = secrets.token_hex(8)
+        exists = (
+            db.query(UserSettings)
+            .filter(UserSettings.wishlist_share_token == token)
+            .first()
+        )
+        if not exists:
+            return token
+    raise HTTPException(status_code=500, detail="Could not generate share token")
+
+
+def get_wishlist_share_settings(db: Session, user: User) -> UserSettings:
+    return _get_or_create_settings(db, user.id)
+
+
+def set_wishlist_public(db: Session, user: User, public: bool) -> UserSettings:
+    settings = _get_or_create_settings(db, user.id)
+    settings.wishlist_public = public
+    if public and not settings.wishlist_share_token:
+        settings.wishlist_share_token = _generate_share_token(db)
+    db.commit()
+    db.refresh(settings)
+    return settings
+
+
+def get_public_owner_by_token(db: Session, token: str) -> User:
+    settings = (
+        db.query(UserSettings)
+        .filter(
+            UserSettings.wishlist_share_token == token,
+            UserSettings.wishlist_public.is_(True),
+        )
+        .first()
+    )
+    if not settings:
+        raise NoResultFound("Shared wishlist not found or private")
+    return get_user(db, settings.user_id)
+
+
+def list_public_wishlist_owners(db: Session) -> List[User]:
+    rows = (
+        db.query(User)
+        .join(UserSettings, User.id == UserSettings.user_id)
+        .filter(UserSettings.wishlist_public.is_(True))
+        .order_by(User.username.asc().nullslast(), User.id.asc())
+        .all()
+    )
+    return rows
+
+
+def is_wishlist_public(db: Session, user_id: int) -> bool:
+    settings = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+    return bool(settings and settings.wishlist_public)
