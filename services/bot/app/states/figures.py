@@ -48,3 +48,11 @@ class HelpState(StatesGroup):
 class CollectionState(StatesGroup):
     browsing = State()
     waiting_list_query = State()
+
+
+class WishlistState(StatesGroup):
+    waiting_title = State()
+    waiting_description = State()
+    waiting_price = State()
+    waiting_url = State()
+    waiting_edit_value = State()

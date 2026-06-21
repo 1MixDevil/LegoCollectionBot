@@ -35,7 +35,10 @@ def build_main_kb(role: str) -> InlineKeyboardMarkup:
     if row2:
         rows.append(row2)
 
-    # «Желаемое» скрыто до реализации функции
+    if can_access(role, "wishlist"):
+        rows.append(
+            [InlineKeyboardButton(text="💫 Желания", callback_data="wishlist")]
+        )
 
     if can_access(role, "tierlist"):
         rows.append(
@@ -380,6 +383,14 @@ def make_info_kb(
                 ),
             ]
         )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="💫 В желания",
+                callback_data=f"info_action:wishlist:{serial}",
+            ),
+        ]
+    )
     rows.append(
         [InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel")]
     )

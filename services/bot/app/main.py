@@ -24,6 +24,7 @@ from app.handlers.stubs import router as stubs_router
 from app.handlers.update_figures import router as update_figures_router
 from app.handlers.admin_panel import router as admin_panel_router
 from app.handlers.help import router as help_router
+from app.handlers.wishlist import router as wishlist_router
 from app.keyboards.main import prompt_kb
 from app.services.menu import send_main_menu
 from app.states.figures import AddFigureState
@@ -114,6 +115,7 @@ async def main() -> None:
     dp.include_router(add_figure_router)
     dp.include_router(photo_search_router)
     dp.include_router(help_router)
+    dp.include_router(wishlist_router)
     dp.include_router(stubs_router)
     dp.include_router(update_figures_router)
     dp.include_router(delete_figure_router)

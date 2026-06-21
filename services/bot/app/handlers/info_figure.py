@@ -3,11 +3,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from httpx import HTTPStatusError
+import logging
 
 from app.api.collection import (
     add_figure_to_user,
     delete_figure_from_user,
     fetch_similar_serials,
+    get_figure_info,
     list_user_figures,
     search_figures_by_keyword,
     update_all_user_figure_records,
@@ -17,6 +19,7 @@ from app.core.access import ensure_access
 from app.core.config import MAX_SERIALS_PER_REQUEST
 from app.keyboards.main import make_suggestions_kb, nav_kb, prompt_kb
 from app.keyboards.nav_labels import MAIN_MENU_LABEL
+from app.handlers.wishlist import start_wishlist_from_figure
 from app.services.figure_display import (
     refresh_figure_card_message,
     send_figure_card,
@@ -26,6 +29,7 @@ from app.states.figures import InfoFigures
 from app.utils.serial_parse import parse_serial_list
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 FIGURE_CARD_PROMPT = (
     "ℹ️ <b>Карточка фигурки</b>\n\n"
@@ -308,6 +312,24 @@ async def cb_info_actions(call: types.CallbackQuery, state: FSMContext):
             await refresh_figure_card_message(call.message, telegram_id, serial)
         except HTTPStatusError:
             await call.answer("Не удалось удалить.")
+    elif action == "wishlist":
+        if not await ensure_access(call, "wishlist"):
+            return
+        await call.answer()
+        title = serial
+        try:
+            info = await get_figure_info(telegram_id, serial)
+            title = info.get("name") or serial
+        except HTTPStatusError:
+            pass
+        except Exception:
+            logger.debug("figure info for wishlist", exc_info=True)
+        await start_wishlist_from_figure(
+            call.message,
+            state,
+            bricklink_id=serial,
+            title=title,
+        )
     else:
         await call.answer("Действие недоступно.")
 

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, Date, ForeignKey
+from sqlalchemy import Column, Integer, String, Numeric, Date, ForeignKey, DateTime, func
 from sqlalchemy.orm import relationship
 from app.core.db import Base
 
@@ -48,3 +48,17 @@ class CollectType(Base):
     bricklink_cat_string = Column(String, nullable=True)
 
     figures = relationship("Figure", back_populates="type_collected")
+
+
+class WishlistItem(Base):
+    __tablename__ = "wishlist_items"
+    __table_args__ = {"schema": "figure"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    description = Column(String(1000), nullable=True)
+    price_estimate = Column(Numeric(10, 2), nullable=True)
+    product_url = Column(String(500), nullable=True)
+    bricklink_id = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

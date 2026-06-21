@@ -14,17 +14,22 @@ async def safe_edit_or_answer(
     *,
     reply_markup=None,
     parse_mode: str | None = None,
+    disable_web_page_preview: bool = False,
 ) -> types.Message:
     """
     Редактирует сообщение, если в нём есть текст; иначе отправляет новое.
     Нужно для callback на фото/документах (tier-list, коллаж и т.д.).
     """
+    preview_kw = (
+        {"disable_web_page_preview": True} if disable_web_page_preview else {}
+    )
     if message.text:
         try:
             return await message.edit_text(
                 text,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
+                **preview_kw,
             )
         except (TelegramBadRequest, TelegramNetworkError):
             pass
@@ -35,6 +40,7 @@ async def safe_edit_or_answer(
                 text,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
+                **preview_kw,
             ),
             label="message.answer",
         )

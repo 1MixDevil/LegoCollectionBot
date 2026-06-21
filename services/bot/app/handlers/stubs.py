@@ -13,7 +13,6 @@ STUB_CALLBACKS = frozenset({
     "marketplace",
     "my_listings",
     "browse_listings",
-    "wishlist",
     "toggle_wishlist_visibility",
     "premium",
     "bind_bricklink",
@@ -25,7 +24,6 @@ STUB_FEATURES = {
     "marketplace": "marketplace",
     "my_listings": "marketplace",
     "browse_listings": "marketplace",
-    "wishlist": "wishlist",
     "toggle_wishlist_visibility": "wishlist",
 }
 

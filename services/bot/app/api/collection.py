@@ -189,3 +189,64 @@ async def add_figure_to_user_bulk(
         )
         response.raise_for_status()
         return response.json()
+
+
+async def list_user_wishlist(telegram_id: str) -> list[dict[str, Any]]:
+    user_id = await resolve_user_id(telegram_id)
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{COLLECTION_BASE_URL}/wishlist/user/{user_id}/")
+        response.raise_for_status()
+        return response.json()
+
+
+async def create_wishlist_item(
+    telegram_id: str,
+    *,
+    title: str,
+    description: str | None = None,
+    price_estimate: float | None = None,
+    product_url: str | None = None,
+    bricklink_id: str | None = None,
+) -> dict[str, Any]:
+    user_id = await resolve_user_id(telegram_id)
+    payload = {
+        "user_id": user_id,
+        "title": title,
+        "description": description,
+        "price_estimate": price_estimate,
+        "product_url": product_url,
+        "bricklink_id": bricklink_id.lower() if bricklink_id else None,
+    }
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{COLLECTION_BASE_URL}/wishlist/user/",
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def update_wishlist_item(
+    telegram_id: str,
+    item_id: int,
+    **fields: Any,
+) -> dict[str, Any]:
+    user_id = await resolve_user_id(telegram_id)
+    async with httpx.AsyncClient() as client:
+        response = await client.patch(
+            f"{COLLECTION_BASE_URL}/wishlist/user/{item_id}",
+            params={"user_id": user_id},
+            json=fields,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def delete_wishlist_item(telegram_id: str, item_id: int) -> None:
+    user_id = await resolve_user_id(telegram_id)
+    async with httpx.AsyncClient() as client:
+        response = await client.delete(
+            f"{COLLECTION_BASE_URL}/wishlist/user/{item_id}",
+            params={"user_id": user_id},
+        )
+        response.raise_for_status()
