@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 PROMPT = (
-    "Введите префикс серии из каталога BrickLink.\n"
-    "Например: <code>sw</code> (Star Wars), <code>hp</code> (Harry Potter).\n\n"
-    "Бот скачает новые минифигурки этой серии в общий каталог БД."
+    "Введите <b>префикс артикула</b> из каталога BrickLink.\n"
+    "Например: <code>sw</code> (Star Wars), <code>hp</code>, <code>poc</code>, <code>lor</code>.\n\n"
+    "Бот сам найдёт серию по префиксу и скачает минифигурки в общий каталог."
 )
 
 

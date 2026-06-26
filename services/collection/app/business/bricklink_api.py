@@ -116,3 +116,23 @@ def get_catalog_item(item_no: str, item_type: str = "MINIFIG") -> CatalogItemDat
         weight=str(data["weight"]) if data.get("weight") else None,
         extra=extra,
     )
+
+
+def get_category_name(category_id: int) -> Optional[str]:
+    """Название темы/категории BrickLink по category_id из items API."""
+    if not api_credentials_configured():
+        return None
+    url = f"{API_BASE}/categories/{category_id}"
+    try:
+        response = _oauth_session().get(url, timeout=30)
+        payload: dict[str, Any] = response.json()
+    except Exception:
+        logger.debug("category lookup failed for %s", category_id, exc_info=True)
+        return None
+
+    meta = payload.get("meta") or {}
+    if str(meta.get("code", response.status_code)) != "200":
+        return None
+    data = payload.get("data") or {}
+    name = unescape(str(data.get("category_name") or "")).strip()
+    return name or None

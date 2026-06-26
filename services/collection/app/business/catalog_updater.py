@@ -117,7 +117,7 @@ async def ensure_collect_type(db: Session, article: str) -> CollectType:
     if not meta:
         raise ValueError(
             f"Серия «{article}» не найдена на BrickLink. "
-            "Проверьте префикс (например lor, sw, hp, sim)."
+            "Проверьте префикс артикула (например sw, hp, poc, lor)."
         )
 
     ct = CollectType(
