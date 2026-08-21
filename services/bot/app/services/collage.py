@@ -200,16 +200,15 @@ class StarWarsCollageGenerator:
         text: str | None,
         font_path: str = "arial.ttf",
     ) -> Image.Image:
-        """Почти прозрачная диагональная надпись поверх всего коллажа."""
+        """Полупрозрачная диагональная надпись: мелкий шрифт, 2–3 штуки на лист."""
         label = (text or "").strip()
         if not label:
             return collage
 
         w, h = collage.size
-        font_size = max(28, min(w, h) // 14)
+        font_size = max(18, min(36, min(w, h) // 32))
         font = StarWarsCollageGenerator.load_font(font_path, font_size)
 
-        # Прозрачность ~20% — заметно, но не мешает
         fill = (70, 70, 70, 52)
         dummy = Image.new("RGBA", (1, 1))
         measure = ImageDraw.Draw(dummy)
@@ -218,7 +217,7 @@ class StarWarsCollageGenerator:
         tw = max(1, bbox[2] - bbox[0])
         th = max(1, bbox[3] - bbox[1])
 
-        pad = font_size
+        pad = max(4, font_size // 2)
         tile = Image.new("RGBA", (tw + pad * 2, th + pad * 2), (0, 0, 0, 0))
         ImageDraw.Draw(tile).text((pad, pad), label, font=font, fill=fill)
         rotated = tile.rotate(28, expand=True, resample=Image.Resampling.BICUBIC)
@@ -226,11 +225,16 @@ class StarWarsCollageGenerator:
 
         overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         rw, rh = rotated.size
-        step_x = max(rw + font_size, int(rw * 1.35))
-        step_y = max(rh + font_size, int(rh * 1.55))
-        for y in range(-rh, h + rh, step_y):
-            for x in range(-rw, w + rw, step_x):
-                overlay.paste(rotated, (x, y), rotated)
+        # 3 позиции по диагонали (на маленьких листах средняя может совпасть — ок)
+        anchors = (
+            (w * 0.18, h * 0.22),
+            (w * 0.50, h * 0.50),
+            (w * 0.78, h * 0.78),
+        )
+        for cx, cy in anchors:
+            x = int(cx - rw / 2)
+            y = int(cy - rh / 2)
+            overlay.paste(rotated, (x, y), rotated)
         rotated.close()
 
         base = collage.convert("RGBA")
