@@ -15,7 +15,7 @@ from typing import Optional
 import aiohttp
 from lxml import html
 
-from app.business.bricklink_client import build_headers
+from app.business.bricklink_client import build_headers, read_bricklink_text
 
 logger = logging.getLogger("BrickLinkPriceGuide")
 
@@ -150,7 +150,7 @@ async def fetch_price_guide(
             timeout=aiohttp.ClientTimeout(total=45),
         ) as resp:
             resp.raise_for_status()
-            text = await resp.text()
+            text = await read_bricklink_text(resp)
     except Exception as exc:
         logger.warning("price guide fetch %s: %s", bricklink_id, exc)
         data = PriceGuideData(bricklink_id=bricklink_id, error=str(exc))

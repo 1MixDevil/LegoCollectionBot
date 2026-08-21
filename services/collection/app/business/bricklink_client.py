@@ -94,6 +94,34 @@ def build_headers() -> dict[str, str]:
     }
 
 
+def decode_bricklink_body(raw: bytes, charset: str | None = None) -> str:
+    """
+    BrickLink часто отдаёт HTML в windows-1252 / iso-8859-1 без корректного charset.
+    aiohttp resp.text() по умолчанию падает на UTF-8 (byte 0xe9 и т.п.).
+    """
+    candidates: list[str] = []
+    if charset:
+        candidates.append(charset)
+    candidates.extend(["utf-8", "cp1252", "latin-1"])
+    seen: set[str] = set()
+    for enc in candidates:
+        key = enc.lower().replace("_", "-")
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            return raw.decode(enc)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+async def read_bricklink_text(resp) -> str:
+    """Прочитать тело aiohttp-ответа с устойчивым декодированием."""
+    raw = await resp.read()
+    return decode_bricklink_body(raw, getattr(resp, "charset", None))
+
+
 def parse_catalog_html(text: str, item_id: str) -> PageFetchResult:
     lowered = text.lower()
     item_id_lower = item_id.lower()

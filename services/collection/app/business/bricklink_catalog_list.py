@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, urlparse
 import aiohttp
 from lxml import html
 
-from app.business.bricklink_client import build_headers
+from app.business.bricklink_client import build_headers, read_bricklink_text
 
 logger = logging.getLogger("BrickLinkCatalogList")
 
@@ -194,7 +194,7 @@ async def _fetch_text(
                 await asyncio.sleep(wait)
                 continue
             resp.raise_for_status()
-            text = await resp.text()
+            text = await read_bricklink_text(resp)
             if "quota exceeded" in text.lower() or "error.page?code=429" in str(resp.url):
                 wait = 10 * (attempt + 1)
                 logger.warning("BrickLink quota, ждём %s сек", wait)
