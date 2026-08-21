@@ -165,10 +165,15 @@ async def sync_from_bricklink_catalog(db: Session, article: str) -> dict:
         )
         if cat_used:
             ct.bricklink_cat_string = cat_used
-            if cat_label and ct.name.strip().lower() in GENERIC_THEME_NAMES:
+            if cat_label and (
+                not ct.name
+                or ct.name.strip().lower() in GENERIC_THEME_NAMES
+                or ct.name.strip().lower() == article
+            ):
                 ct.name = cat_label
             db.commit()
     except BrickLinkBlockedError as exc:
+        logger.exception("[%s] BrickLink blocked", article)
         return {
             "added": 0,
             "article": article,
@@ -180,17 +185,18 @@ async def sync_from_bricklink_catalog(db: Session, article: str) -> dict:
             "source": "bricklink_catalog",
             "message": str(exc),
         }
-    except RuntimeError as exc:
+    except Exception as exc:
+        logger.exception("[%s] catalog fetch failed", article)
         return {
             "added": 0,
             "article": article,
             "existing_before": existing_count,
             "scanned_found": 0,
             "checked_base": 0,
-            "miss_reasons": {"rate_limit": 1},
+            "miss_reasons": {"error": 1},
             "status": "blocked",
             "source": "bricklink_catalog",
-            "message": str(exc),
+            "message": f"Ошибка загрузки каталога: {exc}",
         }
 
     added = insert_figures(db, ct, records)

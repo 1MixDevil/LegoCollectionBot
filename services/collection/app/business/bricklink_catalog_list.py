@@ -45,7 +45,10 @@ BOT_MARKERS = (
     "attention required",
     "cf-browser-verification",
     "general error",
+    "403 forbidden",
+    "<title>403",
 )
+MIN_USEFUL_HTML = 1500
 
 
 _cat_cache: dict[str, str] = {}
@@ -296,35 +299,52 @@ async def _fetch_text(
     retries: int = 3,
 ) -> str:
     cookies = load_bricklink_cookies() or None
+    last_err: Exception | None = None
     for attempt in range(retries):
         if REQUEST_DELAY > 0:
             await asyncio.sleep(REQUEST_DELAY)
-        async with session.get(
-            url,
-            params=params,
-            headers=build_headers(),
-            cookies=cookies,
-            timeout=aiohttp.ClientTimeout(total=60),
-        ) as resp:
-            if resp.status == 429:
-                wait = 5 * (attempt + 1)
-                logger.warning("BrickLink 429, ждём %s сек", wait)
-                await asyncio.sleep(wait)
-                continue
-            resp.raise_for_status()
-            text = await read_bricklink_text(resp)
-            if "quota exceeded" in text.lower() or "error.page?code=429" in str(resp.url):
-                wait = 10 * (attempt + 1)
-                logger.warning("BrickLink quota, ждём %s сек", wait)
-                await asyncio.sleep(wait)
-                continue
-            if _is_bot_wall(text):
-                raise BrickLinkBlockedError(
-                    "BrickLink вернул anti-bot / General Error. "
-                    "Обновите BRICKLINK_COOKIES в .env "
-                    "(BLNEWSESSIONID + aws-waf-token из браузера)."
+        try:
+            async with session.get(
+                url,
+                params=params,
+                headers=build_headers(),
+                cookies=cookies,
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as resp:
+                status = resp.status
+                text = await read_bricklink_text(resp)
+                logger.info(
+                    "BrickLink GET %s params=%s -> HTTP %s, %s bytes",
+                    url.split("?")[0],
+                    params,
+                    status,
+                    len(text),
                 )
-            return text
+                if status == 429 or "quota exceeded" in text.lower() or "error.page?code=429" in str(
+                    resp.url
+                ):
+                    wait = 10 * (attempt + 1)
+                    logger.warning("BrickLink quota/429, ждём %s сек", wait)
+                    await asyncio.sleep(wait)
+                    continue
+                if status in (403, 503) or _is_bot_wall(text) or len(text) < MIN_USEFUL_HTML:
+                    raise BrickLinkBlockedError(
+                        f"BrickLink недоступен (HTTP {status}, {len(text)} байт). "
+                        "Включите VPN на сервере или задайте свежие BRICKLINK_COOKIES "
+                        "(BLNEWSESSIONID + aws-waf-token). Куки раньше не были обязательны — "
+                        "сейчас BrickLink чаще режет датацентры."
+                    )
+                if status >= 400:
+                    resp.raise_for_status()
+                return text
+        except BrickLinkBlockedError:
+            raise
+        except Exception as exc:
+            last_err = exc
+            logger.warning("BrickLink fetch attempt %s failed: %s", attempt + 1, exc)
+            await asyncio.sleep(2 * (attempt + 1))
+    if last_err:
+        raise RuntimeError(f"BrickLink: не удалось загрузить страницу: {last_err}") from last_err
     raise RuntimeError("BrickLink: превышен лимит запросов (429)")
 
 
@@ -531,30 +551,46 @@ async def discover_series_metadata(
 ) -> Optional[dict[str, object]]:
     """
     Метаданные серии для type_of_collect, если записи ещё нет в БД.
+    Сначала поиск q=article (надёжнее дерева категорий).
     """
     article = article.strip().lower()
     async with aiohttp.ClientSession() as session:
-        cat, label = await resolve_cat_string(session, article, theme_name)
-        if not cat:
-            return None
-
         sample_html = await _fetch_text(
             session,
             CATALOG_LIST_URL,
-            {
-                "catType": "M",
-                "catString": cat,
-                "pageSize": 50,
-                "pg": 1,
-            },
+            {"catType": "M", "q": article, "pageSize": 50, "pg": 1},
         )
         items = parse_catalog_list_page(sample_html, article)
+        cat, label = None, None
+        if not items:
+            cat, label = await resolve_cat_string(session, article, theme_name)
+            if cat:
+                sample_html = await _fetch_text(
+                    session,
+                    CATALOG_LIST_URL,
+                    {
+                        "catType": "M",
+                        "catString": cat,
+                        "pageSize": 50,
+                        "pg": 1,
+                    },
+                )
+                items = parse_catalog_list_page(sample_html, article)
+        else:
+            # параллельно узнаём catString для кэша, но не валимся если дерево закрыто
+            try:
+                cat, label = await resolve_cat_string(session, article, theme_name)
+            except BrickLinkBlockedError:
+                logger.warning("[%s] дерево категорий недоступно, оставляем только поиск", article)
+                cat, label = None, theme_name or article.upper()
+
         if not items:
             return None
 
         ids = [item_id for item_id, _ in items]
+        hint_name = (ARTICLE_KEYWORD_HINTS.get(article) or [article])[0]
         return {
-            "name": label or article.upper(),
+            "name": label or (theme_name or hint_name.title()),
             "pad_len": infer_pad_len(ids, article),
             "cat_string": cat,
             "sample_count": len(items),
@@ -570,17 +606,22 @@ async def fetch_minifigs_by_article(
     delay_sec: float = 0.5,
 ) -> tuple[list[tuple[str, str]], Optional[str], Optional[str]]:
     """
-    Все минифигурки серии по префиксу BrickLink (sw, hp, sim, …) из catalogList.
-    Возвращает (records, catString, category_label).
+    Все минифигурки серии по префиксу BrickLink (sw, hp, njo, …).
+
+    Порядок (намеренно):
+    1) поиск q=article — работает без точной категории;
+    2) категория catString — добирает полный список.
+    Куки не обязательны; при 403/anti-bot будет явная ошибка.
     """
     article = article.strip().lower()
     collected: dict[str, str] = {}
     resolved_cat: Optional[str] = None
     resolved_label: Optional[str] = None
 
-    async def _paginate(params_base: dict) -> None:
+    async def _paginate(params_base: dict, label: str) -> int:
         nonlocal collected
         page = 1
+        added_total = 0
         while page <= MAX_CATALOG_PAGES:
             before = len(collected)
             params = {**params_base, "pageSize": page_size, "pg": page}
@@ -590,9 +631,11 @@ async def fetch_minifigs_by_article(
                 collected[item_id] = name
 
             added = len(collected) - before
+            added_total += added
             logger.info(
-                "[%s] BrickLink catalogList стр.%s: +%s новых (на стр. %s, всего %s)",
+                "[%s] %s стр.%s: +%s (на стр. %s, всего %s)",
                 article,
+                label,
                 page,
                 added,
                 len(batch),
@@ -603,29 +646,45 @@ async def fetch_minifigs_by_article(
             page += 1
             if delay_sec > 0 and REQUEST_DELAY <= 0:
                 await asyncio.sleep(delay_sec)
+        return added_total
 
     async with aiohttp.ClientSession() as session:
-        cat, label = await resolve_cat_string(
-            session,
-            article,
-            theme_name or None,
-            cached_cat=bricklink_cat,
-        )
+        # 1) Поиск по префиксу — основной путь
+        await _paginate({"catType": "M", "q": article}, "search")
+
+        # 2) Категория — дополнение (если доступна)
+        try:
+            cat, label = await resolve_cat_string(
+                session,
+                article,
+                theme_name or None,
+                cached_cat=bricklink_cat,
+            )
+        except BrickLinkBlockedError as exc:
+            logger.warning("[%s] категорию не удалось открыть: %s", article, exc)
+            cat, label = None, None
+
         if cat:
             resolved_cat = cat
             resolved_label = label
-            await _paginate({"catType": "M", "catString": cat})
-
-        # Fallback: поиск по префиксу, если категория пустая / неверная
-        if not collected:
-            logger.warning(
-                "[%s] Категория пуста (cat=%s), пробуем поиск q=%s",
+            before = len(collected)
+            await _paginate({"catType": "M", "catString": cat}, f"cat:{cat}")
+            logger.info(
+                "[%s] после категории cat=%s: было %s, стало %s",
                 article,
                 cat,
-                article,
+                before,
+                len(collected),
             )
-            await _paginate({"catType": "M", "q": article})
-            if collected and not resolved_label:
-                resolved_label = theme_name or article.upper()
+
+        if not collected:
+            logger.error(
+                "[%s] 0 минифигурок после search+category (cat=%s, theme=%s)",
+                article,
+                resolved_cat,
+                theme_name,
+            )
+        elif not resolved_label:
+            resolved_label = theme_name or article.upper()
 
     return sorted(collected.items()), resolved_cat, resolved_label

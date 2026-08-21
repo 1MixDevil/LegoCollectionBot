@@ -85,7 +85,8 @@ def build_headers() -> dict[str, str]:
             "image/avif,image/webp,*/*;q=0.8"
         ),
         "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
+        # Без br: aiohttp часто не умеет brotli → битый HTML и «пустой» каталог
+        "Accept-Encoding": "gzip, deflate",
         "Referer": "https://www.bricklink.com/catalog.asp",
         "Sec-Fetch-Dest": "document",
         "Sec-Fetch-Mode": "navigate",
