@@ -209,8 +209,8 @@ class StarWarsCollageGenerator:
         font_size = max(28, min(w, h) // 14)
         font = StarWarsCollageGenerator.load_font(font_path, font_size)
 
-        # Прозрачность ~10% — едва заметно на фоне
-        fill = (90, 90, 90, 26)
+        # Прозрачность ~20% — заметно, но не мешает
+        fill = (70, 70, 70, 52)
         dummy = Image.new("RGBA", (1, 1))
         measure = ImageDraw.Draw(dummy)
         bbox = measure.textbbox((0, 0), label, font=font)

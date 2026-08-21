@@ -97,3 +97,31 @@ def get_collage_watermark_sync() -> str:
             return str(response.json().get("text") or "").strip()
     except Exception:
         return ""
+
+
+async def get_collage_limits() -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.get(f"{AUTH_BASE_URL}/bot-settings/collage_limits")
+        response.raise_for_status()
+        return response.json()
+
+
+async def set_collage_limits(**fields: int) -> dict[str, Any]:
+    payload = {k: v for k, v in fields.items() if v is not None}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.put(
+            f"{AUTH_BASE_URL}/bot-settings/collage_limits",
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+def get_collage_limits_sync() -> dict[str, Any]:
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(f"{AUTH_BASE_URL}/bot-settings/collage_limits")
+            response.raise_for_status()
+            return response.json()
+    except Exception:
+        return {}

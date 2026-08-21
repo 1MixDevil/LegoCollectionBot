@@ -5,19 +5,28 @@ from aiogram import F, Router, types
 from aiogram.fsm.context import FSMContext
 
 from app.api.auth import (
+    get_collage_limits,
     get_collage_watermark,
     get_user_by_telegram,
     list_users,
+    set_collage_limits,
     set_collage_watermark,
     set_user_role,
 )
 from app.core.access import ensure_access
 from app.core.permissions import ROLE_LABELS
 from app.keyboards.main import (
+    admin_limits_kb,
     admin_panel_kb,
     admin_role_kb,
     admin_users_list_kb,
     admin_watermark_kb,
+)
+from app.services.collage_limits import (
+    LIMIT_KEYS,
+    LIMIT_LABELS,
+    get_limits,
+    invalidate_limits_cache,
 )
 from app.states.figures import AdminPanelState
 from app.utils.message import safe_edit_or_answer
@@ -46,8 +55,17 @@ def _watermark_card(text: str) -> str:
     return (
         "💧 <b>Водяной знак коллажей</b>\n\n"
         f"Текущий текст: {shown}\n\n"
-        "Надпись почти прозрачно отображается на фоне всех тир‑листов и коллажей."
+        "Надпись полупрозрачно отображается на фоне всех тир‑листов и коллажей."
     )
+
+
+def _limits_card(limits: dict) -> str:
+    lines = ["⚙️ <b>Лимиты коллажей / tier‑листов</b>\n"]
+    for key in LIMIT_KEYS:
+        label = LIMIT_LABELS.get(key, key)
+        lines.append(f"• {label}: <code>{limits.get(key, '—')}</code>")
+    lines.append("\nНажмите параметр, чтобы изменить число.")
+    return "\n".join(lines)
 
 
 @router.callback_query(F.data == "admin_panel")
@@ -58,9 +76,79 @@ async def cb_admin_panel(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
     await safe_edit_or_answer(
         call.message,
-        "🛡 <b>Админ‑панель</b>\n\nУправление правами пользователей и водяным знаком.",
+        "🛡 <b>Админ‑панель</b>\n\n"
+        "Права пользователей, водяной знак и лимиты коллажей.",
         parse_mode="HTML",
         reply_markup=admin_panel_kb(),
+    )
+
+
+@router.callback_query(F.data == "admin_limits")
+async def cb_admin_limits(call: types.CallbackQuery, state: FSMContext):
+    if not await ensure_access(call, "admin_panel"):
+        return
+    await state.clear()
+    await call.answer()
+    try:
+        limits = await get_collage_limits()
+    except Exception:
+        logger.exception("get_collage_limits failed")
+        limits = get_limits(force_refresh=True)
+    await safe_edit_or_answer(
+        call.message,
+        _limits_card(limits),
+        parse_mode="HTML",
+        reply_markup=admin_limits_kb(limits),
+    )
+
+
+@router.callback_query(F.data.startswith("admin_limit_edit:"))
+async def cb_admin_limit_edit(call: types.CallbackQuery, state: FSMContext):
+    if not await ensure_access(call, "admin_panel"):
+        return
+    key = call.data.split(":", 1)[1]
+    if key not in LIMIT_KEYS:
+        await call.answer("Неизвестный параметр.", show_alert=True)
+        return
+    await call.answer()
+    await state.set_state(AdminPanelState.waiting_limit_value)
+    await state.update_data(limit_key=key)
+    label = LIMIT_LABELS.get(key, key)
+    await call.message.answer(
+        f"Введите новое значение для <b>{label}</b> "
+        f"(целое число ≥ 1):",
+        parse_mode="HTML",
+    )
+
+
+@router.message(AdminPanelState.waiting_limit_value)
+async def on_admin_limit_value(message: types.Message, state: FSMContext):
+    if not await ensure_access(message, "admin_panel"):
+        return
+    raw = (message.text or "").strip()
+    if not raw.isdigit() or int(raw) < 1:
+        await message.answer("Нужно целое число ≥ 1.")
+        return
+    data = await state.get_data()
+    key = data.get("limit_key")
+    if key not in LIMIT_KEYS:
+        await state.clear()
+        await message.answer("Сессия устарела. Откройте лимиты заново.")
+        return
+    value = int(raw)
+    try:
+        limits = await set_collage_limits(**{key: value})
+    except Exception:
+        logger.exception("set_collage_limits failed")
+        await message.answer("Не удалось сохранить.")
+        return
+    invalidate_limits_cache()
+    await state.clear()
+    label = LIMIT_LABELS.get(key, key)
+    await message.answer(
+        f"✅ {label} = <code>{value}</code>\n\n" + _limits_card(limits),
+        parse_mode="HTML",
+        reply_markup=admin_limits_kb(limits),
     )
 
 

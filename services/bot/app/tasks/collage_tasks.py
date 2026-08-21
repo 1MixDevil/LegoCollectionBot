@@ -9,7 +9,7 @@ from typing import Any
 
 from app.celery_app import celery_app
 from app.services.collage_build import build_caption, sync_build_collage
-from app.services.collage_limits import COLLAGE_BATCH_SIZE
+from app.services.collage_limits import collage_batch_size
 from app.services.telegram_send import send_document_sync, send_message_sync
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ def process_collage_job(self, payload: dict[str, Any]) -> dict[str, Any]:
             send_message_sync(
                 chat_id,
                 "❌ Ошибка при сборке коллажа на сервере. Попробуйте позже или "
-                f"уменьшите список (батч {COLLAGE_BATCH_SIZE} фиг.).",
+                f"уменьшите список (батч {collage_batch_size()} фиг.).",
             )
         except Exception:
             logger.exception("failed to notify user about collage error")

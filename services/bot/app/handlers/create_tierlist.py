@@ -12,7 +12,6 @@ from app.api.collection import (
     search_figures_by_keyword,
 )
 from app.core.access import ensure_access, get_main_keyboard, get_user_role
-from app.core.config import MAX_SERIALS_PER_REQUEST
 from app.core.permissions import can_access
 from app.keyboards.main import nav_kb, tierlist_mode_kb
 from app.services.collage_delivery import (
@@ -20,8 +19,9 @@ from app.services.collage_delivery import (
     send_collage_batches,
 )
 from app.services.collage_limits import (
-    COLLAGE_BATCH_SIZE,
     cap_tierlist_records,
+    collage_batch_size,
+    max_serials_per_request,
     should_send_in_batches,
     tierlist_max_figures,
 )
@@ -102,8 +102,9 @@ PARSE_MODE_FEATURE = {
 
 MODE_HINTS = {
     "serials": (
-        "Введите <b>артикулы</b> через запятую или «;»:\n"
-        "<code>sw0001a, sw0002</code>"
+        "Введите <b>артикулы</b> через пробел, запятую или с новой строки:\n"
+        "<code>sw0001a sw0002</code>\n"
+        "или <code>sw0001a, sw0002</code>"
     ),
     "keyword": (
         "Введите <b>ключевые слова</b> для поиска по названию:\n"
@@ -293,7 +294,7 @@ async def on_name_entered(message: types.Message, state: FSMContext):
     await state.update_data(tierlist_mode="serials")
     await message.answer(
         MODE_HINTS["serials"]
-        + f"\n\nЛимит: до {MAX_SERIALS_PER_REQUEST} артикулов.",
+        + f"\n\nЛимит: до {max_serials_per_request()} артикулов.",
         parse_mode="HTML",
         reply_markup=nav_kb(),
     )
@@ -312,11 +313,11 @@ async def cb_tierlist_mode(call: types.CallbackQuery, state: FSMContext):
     await state.update_data(tierlist_mode=mode)
     hint = MODE_HINTS.get(mode, "")
     if mode == "serials":
-        hint += f"\n\nЛимит: до {MAX_SERIALS_PER_REQUEST} артикулов."
+        hint += f"\n\nЛимит: до {max_serials_per_request()} артикулов."
     elif mode == "keyword":
         hint += (
             f"\n\nЛимит: до {TIERLIST_KEYWORD_MAX} "
-            f"(если больше {COLLAGE_BATCH_SIZE} — несколько файлов)."
+            f"(если больше {collage_batch_size()} — несколько файлов)."
         )
     await call.message.answer(hint, parse_mode="HTML", reply_markup=nav_kb())
     await state.set_state(CreateTierList.waiting_serials)
@@ -376,9 +377,10 @@ async def on_serials_entered(message: types.Message, state: FSMContext):
 
     if mode == "serials":
         serials = [s.lower() for s in payload]
-        if len(serials) > MAX_SERIALS_PER_REQUEST:
+        serials_limit = max_serials_per_request()
+        if len(serials) > serials_limit:
             await message.answer(
-                f"❗️ Максимум {MAX_SERIALS_PER_REQUEST} артикулов за раз.",
+                f"❗️ Максимум {serials_limit} артикулов за раз.",
                 reply_markup=nav_kb(),
             )
             return

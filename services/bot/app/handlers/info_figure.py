@@ -11,7 +11,7 @@ from app.api.collection import (
     search_figures_by_keyword,
 )
 from app.core.access import ensure_access, get_main_keyboard
-from app.core.config import MAX_SERIALS_PER_REQUEST
+from app.services.collage_limits import max_serials_per_request
 from app.keyboards.main import make_suggestions_kb, nav_kb, prompt_kb
 from app.services.figure_display import send_figure_card
 from app.states.figures import InfoFigures
@@ -69,9 +69,10 @@ async def get_info_figure(message: types.Message, state: FSMContext) -> None:
     serials = parse_serial_list(text)
 
     if serials is not None:
-        if len(serials) > MAX_SERIALS_PER_REQUEST:
+        serials_limit = max_serials_per_request()
+        if len(serials) > serials_limit:
             await message.answer(
-                f"❗️ Не более {MAX_SERIALS_PER_REQUEST} артикулов за раз.",
+                f"❗️ Не более {serials_limit} артикулов за раз.",
                 reply_markup=nav_kb(),
             )
             return

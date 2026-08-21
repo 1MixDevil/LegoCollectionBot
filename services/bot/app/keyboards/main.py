@@ -127,6 +127,12 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
                     callback_data="admin_watermark",
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text="⚙️ Лимиты коллажей",
+                    callback_data="admin_limits",
+                )
+            ],
             [InlineKeyboardButton(text="↩️ Назад", callback_data="cancel")],
         ]
     )
@@ -155,6 +161,27 @@ def admin_watermark_kb() -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+def admin_limits_kb(limits: dict) -> InlineKeyboardMarkup:
+    from app.services.collage_limits import LIMIT_KEYS, LIMIT_LABELS
+
+    rows = []
+    for key in LIMIT_KEYS:
+        label = LIMIT_LABELS.get(key, key)
+        val = limits.get(key, "?")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{label}: {val}",
+                    callback_data=f"admin_limit_edit:{key}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="↩️ В админ‑панель", callback_data="admin_panel")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def admin_role_kb(user_id: int, current_role: str) -> InlineKeyboardMarkup:
