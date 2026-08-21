@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 
+from app.api.auth import get_collage_watermark_sync
 from app.services.collage import StarWarsCollageGenerator
 from app.services.collage_config import (
     COLLAGE_COLUMNS,
@@ -41,9 +42,12 @@ def sync_build_collage(
     title: str,
     *,
     owned_ids: frozenset[str] | None = None,
+    watermark_text: str | None = None,
 ) -> tuple[str, str] | None:
     path, base_name = output_paths(telegram_id, title)
     os.makedirs(TMP_DIR, exist_ok=True)
+    if watermark_text is None:
+        watermark_text = get_collage_watermark_sync()
     placed = asyncio.run(
         StarWarsCollageGenerator.build_collage_to_file(
             records,
@@ -55,6 +59,7 @@ def sync_build_collage(
             title=title or None,
             max_connections=CONCURRENT_BATCHES,
             owned_ids=owned_ids,
+            watermark_text=watermark_text or None,
         )
     )
     if placed <= 0:

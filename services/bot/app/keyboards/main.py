@@ -121,7 +121,38 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
                     callback_data="admin_users:0",
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text="💧 Водяной знак коллажей",
+                    callback_data="admin_watermark",
+                )
+            ],
             [InlineKeyboardButton(text="↩️ Назад", callback_data="cancel")],
+        ]
+    )
+
+
+def admin_watermark_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✏️ Изменить текст",
+                    callback_data="admin_watermark_edit",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🗑 Очистить",
+                    callback_data="admin_watermark_clear",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="↩️ В админ‑панель",
+                    callback_data="admin_panel",
+                )
+            ],
         ]
     )
 

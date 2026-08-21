@@ -4,12 +4,23 @@ import httpx
 from aiogram import F, Router, types
 from aiogram.fsm.context import FSMContext
 
-from app.api.auth import get_user_by_telegram, list_users, set_user_role
-from app.core.access import ensure_access, get_main_keyboard, get_user_role
+from app.api.auth import (
+    get_collage_watermark,
+    get_user_by_telegram,
+    list_users,
+    set_collage_watermark,
+    set_user_role,
+)
+from app.core.access import ensure_access
 from app.core.permissions import ROLE_LABELS
-from app.keyboards.main import admin_panel_kb, admin_role_kb, admin_users_list_kb
+from app.keyboards.main import (
+    admin_panel_kb,
+    admin_role_kb,
+    admin_users_list_kb,
+    admin_watermark_kb,
+)
 from app.states.figures import AdminPanelState
-from app.utils.message import answer_callback, safe_edit_or_answer
+from app.utils.message import safe_edit_or_answer
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -29,6 +40,16 @@ def _format_user_card(user: dict) -> str:
     )
 
 
+def _watermark_card(text: str) -> str:
+    current = text.strip() if text else ""
+    shown = f"<code>{current}</code>" if current else "<i>не задан</i>"
+    return (
+        "💧 <b>Водяной знак коллажей</b>\n\n"
+        f"Текущий текст: {shown}\n\n"
+        "Надпись почти прозрачно отображается на фоне всех тир‑листов и коллажей."
+    )
+
+
 @router.callback_query(F.data == "admin_panel")
 async def cb_admin_panel(call: types.CallbackQuery, state: FSMContext):
     if not await ensure_access(call, "admin_panel"):
@@ -37,9 +58,88 @@ async def cb_admin_panel(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
     await safe_edit_or_answer(
         call.message,
-        "🛡 <b>Админ‑панель</b>\n\nУправление правами пользователей.",
+        "🛡 <b>Админ‑панель</b>\n\nУправление правами пользователей и водяным знаком.",
         parse_mode="HTML",
         reply_markup=admin_panel_kb(),
+    )
+
+
+@router.callback_query(F.data == "admin_watermark")
+async def cb_admin_watermark(call: types.CallbackQuery, state: FSMContext):
+    if not await ensure_access(call, "admin_panel"):
+        return
+    await state.clear()
+    await call.answer()
+    try:
+        text = await get_collage_watermark()
+    except Exception:
+        logger.exception("get_collage_watermark failed")
+        await call.message.answer("Не удалось загрузить водяной знак.")
+        return
+    await safe_edit_or_answer(
+        call.message,
+        _watermark_card(text),
+        parse_mode="HTML",
+        reply_markup=admin_watermark_kb(),
+    )
+
+
+@router.callback_query(F.data == "admin_watermark_edit")
+async def cb_admin_watermark_edit(call: types.CallbackQuery, state: FSMContext):
+    if not await ensure_access(call, "admin_panel"):
+        return
+    await call.answer()
+    await state.set_state(AdminPanelState.waiting_watermark_text)
+    await call.message.answer(
+        "Введите текст водяного знака (до 200 символов).\n"
+        "Отправьте <code>-</code>, чтобы очистить.",
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "admin_watermark_clear")
+async def cb_admin_watermark_clear(call: types.CallbackQuery, state: FSMContext):
+    if not await ensure_access(call, "admin_panel"):
+        return
+    await state.clear()
+    try:
+        await set_collage_watermark("")
+    except Exception:
+        logger.exception("clear watermark failed")
+        await call.answer("Ошибка сохранения.", show_alert=True)
+        return
+    await call.answer("Водяной знак очищен")
+    await safe_edit_or_answer(
+        call.message,
+        _watermark_card(""),
+        parse_mode="HTML",
+        reply_markup=admin_watermark_kb(),
+    )
+
+
+@router.message(AdminPanelState.waiting_watermark_text)
+async def on_admin_watermark_text(message: types.Message, state: FSMContext):
+    if not await ensure_access(message, "admin_panel"):
+        return
+    raw = (message.text or "").strip()
+    if not raw:
+        await message.answer(
+            "Пришлите текст или <code>-</code> для очистки.",
+            parse_mode="HTML",
+        )
+        return
+    text = "" if raw == "-" else raw[:200]
+    try:
+        saved = await set_collage_watermark(text)
+    except Exception:
+        logger.exception("set_collage_watermark failed")
+        await message.answer("Не удалось сохранить водяной знак.")
+        return
+    await state.clear()
+    await message.answer(
+        _watermark_card(saved) + "\n\n✅ Сохранено.",
+        parse_mode="HTML",
+        reply_markup=admin_watermark_kb(),
     )
 
 
@@ -61,7 +161,10 @@ async def on_admin_telegram_id(message: types.Message, state: FSMContext):
         return
     tid = (message.text or "").strip()
     if not tid.isdigit():
-        await message.answer("Нужен числовой ID, например <code>123456789</code>.", parse_mode="HTML")
+        await message.answer(
+            "Нужен числовой ID, например <code>123456789</code>.",
+            parse_mode="HTML",
+        )
         return
     try:
         user = await get_user_by_telegram(tid)

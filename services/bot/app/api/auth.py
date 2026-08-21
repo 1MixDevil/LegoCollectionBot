@@ -65,3 +65,35 @@ async def update_user_settings(user_id: int, **fields: bool) -> dict[str, Any]:
         )
         response.raise_for_status()
         return response.json()
+
+
+async def get_collage_watermark() -> str:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.get(
+            f"{AUTH_BASE_URL}/bot-settings/collage_watermark"
+        )
+        response.raise_for_status()
+        return str(response.json().get("text") or "").strip()
+
+
+async def set_collage_watermark(text: str) -> str:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.put(
+            f"{AUTH_BASE_URL}/bot-settings/collage_watermark",
+            json={"text": text},
+        )
+        response.raise_for_status()
+        return str(response.json().get("text") or "").strip()
+
+
+def get_collage_watermark_sync() -> str:
+    """Синхронно для Celery worker."""
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(
+                f"{AUTH_BASE_URL}/bot-settings/collage_watermark"
+            )
+            response.raise_for_status()
+            return str(response.json().get("text") or "").strip()
+    except Exception:
+        return ""

@@ -35,6 +35,9 @@ def process_collage_job(self, payload: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
 
     try:
+        from app.api.auth import get_collage_watermark_sync
+
+        watermark_text = get_collage_watermark_sync()
         for idx, part in enumerate(parts, start=1):
             records = part.get("records") or []
             title = part.get("title") or ""
@@ -47,6 +50,7 @@ def process_collage_job(self, payload: dict[str, Any]) -> dict[str, Any]:
                 telegram_id,
                 title,
                 owned_ids=owned,
+                watermark_text=watermark_text,
             )
             if not built:
                 errors.append(f"part {idx}: no images")
