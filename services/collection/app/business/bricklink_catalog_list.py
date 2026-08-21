@@ -17,7 +17,11 @@ from urllib.parse import parse_qs, urlparse
 import aiohttp
 from lxml import html
 
-from app.business.bricklink_client import build_headers, read_bricklink_text
+from app.business.bricklink_client import (
+    build_headers,
+    load_bricklink_cookies,
+    read_bricklink_text,
+)
 
 logger = logging.getLogger("BrickLinkCatalogList")
 
@@ -25,10 +29,24 @@ CATALOG_TREE_URL = "https://www.bricklink.com/catalogTree.asp?itemType=M"
 CATALOG_LIST_URL = "https://www.bricklink.com/catalogList.asp"
 REQUEST_DELAY = float(os.getenv("BRICKLINK_CATALOG_DELAY", "2.0"))
 
-ROW_RE = re.compile(
+# Старый HTML: catalogitem.page?M=id ... <strong>Name</strong>
+ROW_RE_LEGACY = re.compile(
     r'catalogitem\.page\?M=([a-z0-9]+)".*?<strong>([^<]+)</strong>',
     re.IGNORECASE | re.DOTALL,
 )
+# Любая ссылка на карточку с M=
+ITEM_HREF_RE = re.compile(
+    r"(?:/v2/catalog/)?catalogitem\.page\?[^\"'\s>]*[?&]M=([a-z0-9]+)",
+    re.IGNORECASE,
+)
+BOT_MARKERS = (
+    "verify that you're not a robot",
+    "enable javascript and then reload",
+    "attention required",
+    "cf-browser-verification",
+    "general error",
+)
+
 
 _cat_cache: dict[str, str] = {}
 _tree_cache: Optional[str] = None
@@ -81,25 +99,123 @@ def _theme_name_usable(theme_name: Optional[str]) -> bool:
 def _normalize_name(raw: str) -> str:
     import html as html_module
 
-    return html_module.unescape(raw).strip()
+    return re.sub(r"\s+", " ", html_module.unescape(raw)).strip()
 
 
-def parse_catalog_list_page(html: str, article: str) -> list[tuple[str, str]]:
-    """Пары (bricklink_id, name) с одной страницы списка."""
+def _is_bot_wall(html_text: str) -> bool:
+    low = html_text.lower()
+    return any(m in low for m in BOT_MARKERS)
+
+
+class BrickLinkBlockedError(RuntimeError):
+    """BrickLink отдал anti-bot / General Error вместо каталога."""
+
+
+def parse_catalog_list_page(html_text: str, article: str) -> list[tuple[str, str]]:
+    """Пары (bricklink_id, name) с одной страницы списка (старый и новый HTML)."""
     article = article.lower()
+    if _is_bot_wall(html_text):
+        raise BrickLinkBlockedError(
+            "BrickLink вернул anti-bot / General Error. "
+            "Обновите BRICKLINK_COOKIES в .env (BLNEWSESSIONID + aws-waf-token из браузера)."
+        )
+
     seen: set[str] = set()
     out: list[tuple[str, str]] = []
 
-    for match in ROW_RE.finditer(html):
-        item_id = match.group(1).lower()
-        if not item_id.startswith(article):
-            continue
-        if item_id in seen:
-            continue
+    def _add(item_id: str, name: str) -> None:
+        item_id = item_id.lower().strip()
+        name = _normalize_name(name)
+        if not item_id.startswith(article) or item_id in seen:
+            return
+        if not name or name.lower() == item_id:
+            name = item_id
         seen.add(item_id)
-        name = _normalize_name(match.group(2))
-        if name:
-            out.append((item_id, name))
+        out.append((item_id, name))
+
+    # 1) Современный список: table.catalog-list__body-main
+    try:
+        doc = html.fromstring(html_text)
+    except Exception:
+        doc = None
+
+    if doc is not None:
+        rows = doc.xpath(
+            "//table[contains(@class,'catalog-list')]//tr"
+            " | //form[@id='ItemEditForm']//table//tr"
+        )
+        for tr in rows:
+            links = tr.xpath(
+                ".//a[contains(@href,'catalogitem.page') or contains(@href,'catalogItem')]"
+            )
+            if not links:
+                continue
+            href = links[0].get("href") or ""
+            m = re.search(r"[?&]M=([a-z0-9]+)", href, re.I)
+            if not m:
+                # Иногда код только в тексте ссылки
+                code_txt = " ".join(links[0].itertext()).strip()
+                m2 = re.match(r"^([a-z][a-z0-9]*\d+[a-z]?)$", code_txt, re.I)
+                if not m2:
+                    continue
+                item_id = m2.group(1)
+            else:
+                item_id = m.group(1)
+
+            tds = tr.xpath("./td")
+            name = ""
+            if len(tds) >= 3:
+                name = " ".join(tds[2].itertext()).strip()
+            if not name:
+                # ссылка с названием, код в другом месте
+                for a in links:
+                    txt = " ".join(a.itertext()).strip()
+                    if txt and txt.lower() != item_id.lower():
+                        name = txt
+                        break
+            if not name and len(tds) >= 2:
+                name = " ".join(tds[1].itertext()).strip()
+            _add(item_id, name or item_id)
+
+        if out:
+            return out
+
+        # 2) Любые ссылки на карточки + ближайший текст
+        for a in doc.xpath(
+            "//a[contains(@href,'catalogitem.page') or contains(@href,'catalogItem.page')]"
+        ):
+            href = a.get("href") or ""
+            m = re.search(r"[?&]M=([a-z0-9]+)", href, re.I)
+            if not m:
+                continue
+            item_id = m.group(1)
+            name = " ".join(a.itertext()).strip()
+            if not name or name.lower() == item_id.lower():
+                parent = a.getparent()
+                if parent is not None:
+                    # следующий td / strong рядом
+                    strongs = parent.xpath(".//strong")
+                    if strongs:
+                        name = " ".join(strongs[0].itertext()).strip()
+                    else:
+                        sib = parent.getnext()
+                        if sib is not None:
+                            name = " ".join(sib.itertext()).strip()
+            _add(item_id, name or item_id)
+
+        if out:
+            return out
+
+    # 3) Legacy regex
+    for match in ROW_RE_LEGACY.finditer(html_text):
+        _add(match.group(1), match.group(2))
+
+    if out:
+        return out
+
+    # 4) Последний шанс: все M=id на странице, имя = id
+    for match in ITEM_HREF_RE.finditer(html_text):
+        _add(match.group(1), match.group(1))
 
     return out
 
@@ -179,6 +295,7 @@ async def _fetch_text(
     *,
     retries: int = 3,
 ) -> str:
+    cookies = load_bricklink_cookies() or None
     for attempt in range(retries):
         if REQUEST_DELAY > 0:
             await asyncio.sleep(REQUEST_DELAY)
@@ -186,6 +303,7 @@ async def _fetch_text(
             url,
             params=params,
             headers=build_headers(),
+            cookies=cookies,
             timeout=aiohttp.ClientTimeout(total=60),
         ) as resp:
             if resp.status == 429:
@@ -200,6 +318,12 @@ async def _fetch_text(
                 logger.warning("BrickLink quota, ждём %s сек", wait)
                 await asyncio.sleep(wait)
                 continue
+            if _is_bot_wall(text):
+                raise BrickLinkBlockedError(
+                    "BrickLink вернул anti-bot / General Error. "
+                    "Обновите BRICKLINK_COOKIES в .env "
+                    "(BLNEWSESSIONID + aws-waf-token из браузера)."
+                )
             return text
     raise RuntimeError("BrickLink: превышен лимит запросов (429)")
 
@@ -454,31 +578,13 @@ async def fetch_minifigs_by_article(
     resolved_cat: Optional[str] = None
     resolved_label: Optional[str] = None
 
-    async with aiohttp.ClientSession() as session:
-        cat, label = await resolve_cat_string(
-            session,
-            article,
-            theme_name or None,
-            cached_cat=bricklink_cat,
-        )
-        if not cat:
-            return [], None, None
-        resolved_cat = cat
-        resolved_label = label
-
+    async def _paginate(params_base: dict) -> None:
+        nonlocal collected
         page = 1
         while page <= MAX_CATALOG_PAGES:
             before = len(collected)
-            html_text = await _fetch_text(
-                session,
-                CATALOG_LIST_URL,
-                {
-                    "catType": "M",
-                    "catString": cat,
-                    "pageSize": page_size,
-                    "pg": page,
-                },
-            )
+            params = {**params_base, "pageSize": page_size, "pg": page}
+            html_text = await _fetch_text(session, CATALOG_LIST_URL, params)
             batch = parse_catalog_list_page(html_text, article)
             for item_id, name in batch:
                 collected[item_id] = name
@@ -492,13 +598,34 @@ async def fetch_minifigs_by_article(
                 len(batch),
                 len(collected),
             )
-
-            # Не останавливаемся из‑за len(batch) < page_size: BrickLink иногда
-            # отдаёт неполную первую страницу (hp: 46 из 50), дальше есть ещё.
             if not batch or added == 0:
                 break
             page += 1
             if delay_sec > 0 and REQUEST_DELAY <= 0:
                 await asyncio.sleep(delay_sec)
+
+    async with aiohttp.ClientSession() as session:
+        cat, label = await resolve_cat_string(
+            session,
+            article,
+            theme_name or None,
+            cached_cat=bricklink_cat,
+        )
+        if cat:
+            resolved_cat = cat
+            resolved_label = label
+            await _paginate({"catType": "M", "catString": cat})
+
+        # Fallback: поиск по префиксу, если категория пустая / неверная
+        if not collected:
+            logger.warning(
+                "[%s] Категория пуста (cat=%s), пробуем поиск q=%s",
+                article,
+                cat,
+                article,
+            )
+            await _paginate({"catType": "M", "q": article})
+            if collected and not resolved_label:
+                resolved_label = theme_name or article.upper()
 
     return sorted(collected.items()), resolved_cat, resolved_label
