@@ -17,6 +17,7 @@ WATERMARK_KEY = "collage_watermark_text"
 LIMIT_DEFAULTS = {
     "collage_batch_size": "40",
     "collage_force_batch_above": "40",
+    "collage_as_document_above": "20",
     "tierlist_max_member": "80",
     "tierlist_max_premium": "150",
     "tierlist_max_admin": "500",

@@ -16,6 +16,7 @@ _ENV_DEFAULTS: dict[str, int] = {
     "collage_batch_size": int(
         os.getenv("COLLAGE_BATCH_SIZE", os.getenv("BATCH_SIZE", "40"))
     ),
+    "collage_as_document_above": int(os.getenv("COLLAGE_AS_DOCUMENT_ABOVE", "20")),
     "tierlist_max_member": int(os.getenv("TIERLIST_MAX_FIGURES_MEMBER", "80")),
     "tierlist_max_premium": int(os.getenv("TIERLIST_MAX_FIGURES_PREMIUM", "150")),
     "tierlist_max_admin": int(os.getenv("TIERLIST_MAX_FIGURES_ADMIN", "500")),
@@ -27,6 +28,7 @@ LIMIT_KEYS = tuple(_ENV_DEFAULTS.keys())
 LIMIT_LABELS: dict[str, str] = {
     "collage_batch_size": "Размер батча коллажа",
     "collage_force_batch_above": "Дробить коллаж, если больше",
+    "collage_as_document_above": "Файлом, если фигурок больше",
     "tierlist_max_member": "Макс. фигурок (member)",
     "tierlist_max_premium": "Макс. фигурок (premium)",
     "tierlist_max_admin": "Макс. фигурок (admin)",
@@ -97,6 +99,15 @@ def collage_batch_size() -> int:
 
 def collage_force_batch_above() -> int:
     return get_limits()["collage_force_batch_above"]
+
+
+def collage_as_document_above() -> int:
+    """Если фигурок больше порога — sendDocument, иначе sendPhoto."""
+    return get_limits()["collage_as_document_above"]
+
+
+def should_send_as_document(figure_count: int) -> bool:
+    return figure_count > collage_as_document_above()
 
 
 def max_serials_per_request() -> int:

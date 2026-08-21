@@ -9,8 +9,8 @@ from typing import Any
 
 from app.celery_app import celery_app
 from app.services.collage_build import build_caption, sync_build_collage
-from app.services.collage_limits import collage_batch_size
-from app.services.telegram_send import send_document_sync, send_message_sync
+from app.services.collage_limits import collage_batch_size, should_send_as_document
+from app.services.telegram_send import send_collage_sync, send_message_sync
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,13 @@ def process_collage_job(self, payload: dict[str, Any]) -> dict[str, Any]:
                 caption_prefix, title, caption_extra, records, owned
             )
             try:
-                send_document_sync(chat_id, file_path, caption, filename=filename)
+                send_collage_sync(
+                    chat_id,
+                    file_path,
+                    caption,
+                    filename=filename,
+                    as_document=should_send_as_document(len(records)),
+                )
                 sent += 1
             finally:
                 try:
