@@ -54,9 +54,11 @@ def format_update_result(article: str, result: dict) -> str:
 
     if status == "blocked":
         return (
-            f"🚫 Серия <code>{article}</code>: BrickLink недоступен.\n"
-            f"Переключите CATALOG_DATA_SOURCE=rebrickable в .env\n\n"
-            f"{message}"
+            f"🚫 Серия <code>{article}</code>: BrickLink недоступен с сервера.\n"
+            f"{message}\n\n"
+            "Обычно помогает VPN на сервере или свежие "
+            "<code>BRICKLINK_COOKIES</code> в .env "
+            "(раньше куки не нужны были — сейчас датацентры режут чаще)."
         )
 
     return (

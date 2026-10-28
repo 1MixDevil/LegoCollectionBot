@@ -12,6 +12,8 @@ from app.core.config import TG_TOKEN
 logger = logging.getLogger(__name__)
 API_BASE = "https://api.telegram.org"
 MAX_FILE_BYTES = int(os.getenv("COLLAGE_MAX_FILE_BYTES", str(45 * 1024 * 1024)))
+# Bot API: фото обычно до ~10 МБ; оставляем запас
+MAX_PHOTO_BYTES = int(os.getenv("COLLAGE_MAX_PHOTO_BYTES", str(9 * 1024 * 1024)))
 
 
 def send_document_sync(
@@ -53,6 +55,9 @@ def send_photo_sync(
         raise RuntimeError("TG_TOKEN is not set")
     if not os.path.isfile(file_path):
         raise FileNotFoundError(file_path)
+    size = os.path.getsize(file_path)
+    if size > MAX_PHOTO_BYTES:
+        raise ValueError(f"photo too large for sendPhoto: {size}")
 
     name = filename or os.path.basename(file_path)
     url = f"{API_BASE}/bot{TG_TOKEN}/sendPhoto"
@@ -65,6 +70,27 @@ def send_photo_sync(
             body = resp.json()
             if not body.get("ok"):
                 raise RuntimeError(body.get("description", "sendPhoto failed"))
+
+
+def send_collage_sync(
+    chat_id: int,
+    file_path: str,
+    caption: str,
+    *,
+    filename: str | None = None,
+    as_document: bool = True,
+) -> None:
+    """Картинка (sendPhoto) или файл (sendDocument); при ошибке фото — fallback в документ."""
+    if not as_document:
+        try:
+            send_photo_sync(chat_id, file_path, caption, filename=filename)
+            return
+        except Exception:
+            logger.warning(
+                "sendPhoto failed, falling back to sendDocument",
+                exc_info=True,
+            )
+    send_document_sync(chat_id, file_path, caption, filename=filename)
 
 
 def send_message_sync(chat_id: int, text: str) -> None:

@@ -25,6 +25,7 @@ from app.business.bricklink_client import (
     cookies_configured,
     load_bricklink_cookies,
     parse_catalog_html,
+    read_bricklink_text,
 )
 from app.models.figures_model import CollectType, Figure
 
@@ -144,7 +145,7 @@ class FastFigureUpdater:
                     headers=headers,
                     cookies=cookies or None,
                 ) as resp:
-                    text = await resp.text()
+                    text = await read_bricklink_text(resp)
                     status = resp.status
 
                 if status != 200:

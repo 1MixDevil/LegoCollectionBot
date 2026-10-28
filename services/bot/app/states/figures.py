@@ -39,6 +39,8 @@ class CreateTierList(StatesGroup):
 
 class AdminPanelState(StatesGroup):
     waiting_telegram_id = State()
+    waiting_watermark_text = State()
+    waiting_limit_value = State()
 
 
 class HelpState(StatesGroup):

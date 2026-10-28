@@ -67,49 +67,61 @@ async def update_user_settings(user_id: int, **fields: bool) -> dict[str, Any]:
         return response.json()
 
 
-async def get_wishlist_share_settings(telegram_id: str) -> dict[str, Any]:
-    async with httpx.AsyncClient() as client:
+async def get_collage_watermark() -> str:
+    async with httpx.AsyncClient(timeout=5.0) as client:
         response = await client.get(
-            f"{AUTH_BASE_URL}/users/wishlist-share/telegram/{telegram_id}",
+            f"{AUTH_BASE_URL}/bot-settings/collage_watermark"
         )
         response.raise_for_status()
-        return response.json()
+        return str(response.json().get("text") or "").strip()
 
 
-async def set_wishlist_public(telegram_id: str, public: bool) -> dict[str, Any]:
-    async with httpx.AsyncClient() as client:
+async def set_collage_watermark(text: str) -> str:
+    async with httpx.AsyncClient(timeout=5.0) as client:
         response = await client.put(
-            f"{AUTH_BASE_URL}/users/wishlist-share/telegram/{telegram_id}",
-            params={"public": public},
+            f"{AUTH_BASE_URL}/bot-settings/collage_watermark",
+            json={"text": text},
+        )
+        response.raise_for_status()
+        return str(response.json().get("text") or "").strip()
+
+
+def get_collage_watermark_sync() -> str:
+    """Синхронно для Celery worker."""
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(
+                f"{AUTH_BASE_URL}/bot-settings/collage_watermark"
+            )
+            response.raise_for_status()
+            return str(response.json().get("text") or "").strip()
+    except Exception:
+        return ""
+
+
+async def get_collage_limits() -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.get(f"{AUTH_BASE_URL}/bot-settings/collage_limits")
+        response.raise_for_status()
+        return response.json()
+
+
+async def set_collage_limits(**fields: int) -> dict[str, Any]:
+    payload = {k: v for k, v in fields.items() if v is not None}
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.put(
+            f"{AUTH_BASE_URL}/bot-settings/collage_limits",
+            json=payload,
         )
         response.raise_for_status()
         return response.json()
 
 
-async def get_wishlist_owner_by_token(token: str) -> dict[str, Any]:
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{AUTH_BASE_URL}/users/wishlist-share/by-token/{token}",
-        )
-        response.raise_for_status()
-        return response.json()
-
-
-async def list_public_wishlist_owners() -> list[dict[str, Any]]:
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{AUTH_BASE_URL}/users/wishlist-share/public-owners/",
-        )
-        response.raise_for_status()
-        return response.json()
-
-
-async def check_wishlist_public(user_id: int) -> bool:
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{AUTH_BASE_URL}/users/wishlist-share/public-check/{user_id}",
-        )
-        if response.status_code == 403:
-            return False
-        response.raise_for_status()
-        return True
+def get_collage_limits_sync() -> dict[str, Any]:
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(f"{AUTH_BASE_URL}/bot-settings/collage_limits")
+            response.raise_for_status()
+            return response.json()
+    except Exception:
+        return {}

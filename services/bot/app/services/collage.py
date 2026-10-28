@@ -255,6 +255,58 @@ class StarWarsCollageGenerator:
         return images
 
     @staticmethod
+    def _apply_watermark(
+        collage: Image.Image,
+        text: str | None,
+        font_path: str = "arial.ttf",
+    ) -> Image.Image:
+        """Полупрозрачная диагональная надпись: мелкий шрифт, 2–3 штуки на лист."""
+        label = (text or "").strip()
+        if not label:
+            return collage
+
+        w, h = collage.size
+        font_size = max(18, min(36, min(w, h) // 32))
+        font = StarWarsCollageGenerator.load_font(font_path, font_size)
+
+        fill = (70, 70, 70, 52)
+        dummy = Image.new("RGBA", (1, 1))
+        measure = ImageDraw.Draw(dummy)
+        bbox = measure.textbbox((0, 0), label, font=font)
+        dummy.close()
+        tw = max(1, bbox[2] - bbox[0])
+        th = max(1, bbox[3] - bbox[1])
+
+        pad = max(4, font_size // 2)
+        tile = Image.new("RGBA", (tw + pad * 2, th + pad * 2), (0, 0, 0, 0))
+        ImageDraw.Draw(tile).text((pad, pad), label, font=font, fill=fill)
+        rotated = tile.rotate(28, expand=True, resample=Image.Resampling.BICUBIC)
+        tile.close()
+
+        overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        rw, rh = rotated.size
+        # 3 позиции по диагонали (на маленьких листах средняя может совпасть — ок)
+        anchors = (
+            (w * 0.18, h * 0.22),
+            (w * 0.50, h * 0.50),
+            (w * 0.78, h * 0.78),
+        )
+        for cx, cy in anchors:
+            x = int(cx - rw / 2)
+            y = int(cy - rh / 2)
+            overlay.paste(rotated, (x, y), rotated)
+        rotated.close()
+
+        base = collage.convert("RGBA")
+        merged = Image.alpha_composite(base, overlay)
+        base.close()
+        overlay.close()
+        out = merged.convert("RGB")
+        merged.close()
+        collage.close()
+        return out
+
+    @staticmethod
     def _create_collage_impl(
         images: list[Image.Image],
         output_path: str,
@@ -262,6 +314,7 @@ class StarWarsCollageGenerator:
         title: str | None = None,
         font_path: str = "arial.ttf",
         font_size: int = 90,
+        watermark_text: str | None = None,
     ) -> None:
         """Ровная сетка columns×rows: общие w×h для всех ячеек (как в оригинале)."""
         if not images:
@@ -313,6 +366,9 @@ class StarWarsCollageGenerator:
             im.close()
 
         collage = StarWarsCollageGenerator._downscale_if_needed(collage)
+        collage = StarWarsCollageGenerator._apply_watermark(
+            collage, watermark_text, font_path
+        )
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         saved = StarWarsCollageGenerator.save_collage_image(collage, output_path)
         collage.close()
@@ -333,6 +389,7 @@ class StarWarsCollageGenerator:
         font_size: int = 90,
         max_connections: int = 3,
         owned_ids: frozenset[str] | None = None,
+        watermark_text: str | None = None,
     ) -> int:
         """Скачивает ячейки и собирает ровную сетку (батч до ~50 в Celery — OK по RAM)."""
         images = await cls.fetch_and_prepare_images_async(
@@ -356,6 +413,7 @@ class StarWarsCollageGenerator:
             title,
             font_path,
             font_size,
+            watermark_text,
         )
         gc.collect()
         return len(images)
@@ -369,6 +427,7 @@ class StarWarsCollageGenerator:
         title: str | None = None,
         font_path: str = "arial.ttf",
         font_size: int = 90,
+        watermark_text: str | None = None,
     ) -> None:
         imgs = [it[0] if isinstance(it, tuple) else it for it in images]
         await asyncio.to_thread(
@@ -379,6 +438,7 @@ class StarWarsCollageGenerator:
             title,
             font_path,
             font_size,
+            watermark_text,
         )
 
     @classmethod

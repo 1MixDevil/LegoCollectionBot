@@ -4,7 +4,12 @@ import os
 from sqlalchemy import engine_from_config, pool, text
 from alembic import context
 
-from app.models import associations, permissions_model, user_model  # noqa: F401
+from app.models import (  # noqa: F401
+    associations,
+    bot_settings_model,
+    permissions_model,
+    user_model,
+)
 from app.core.db import Base
 
 config = context.config

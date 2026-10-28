@@ -12,29 +12,21 @@ from app.api.collection import (
     search_figures_by_keyword,
 )
 from app.core.access import ensure_access, get_main_keyboard, get_user_role
-from app.core.config import MAX_SERIALS_PER_REQUEST
 from app.core.permissions import can_access
-from app.keyboards.main import nav_kb, tierlist_menu_kb, tierlist_mode_kb
-from app.keyboards.nav_labels import MAIN_MENU_LABEL
+from app.keyboards.main import nav_kb, tierlist_mode_kb
 from app.services.collage_delivery import (
     generate_and_send_collage,
     send_collage_batches,
 )
 from app.services.collage_limits import (
-    COLLAGE_BATCH_SIZE,
     cap_tierlist_records,
+    collage_batch_size,
+    max_serials_per_request,
     should_send_in_batches,
     tierlist_max_figures,
 )
-from app.services.tierlist_daily_limit import get_tierlist_usage
-from app.services.tierlist_title import (
-    TIERLIST_TITLE_MAX,
-    looks_like_serial_list,
-    normalize_tierlist_title,
-)
 from app.states.figures import CreateTierList
-from app.utils.message import safe_edit_or_answer
-from app.utils.serial_parse import invalid_serial_tokens, parse_serial_list
+from app.utils.serial_parse import parse_serial_list
 from app.utils.telegram_network import safe_callback_answer
 
 logger = logging.getLogger(__name__)
@@ -67,70 +59,8 @@ def tierlist_mark_owned_kb() -> InlineKeyboardMarkup:
                     callback_data="tierlist_mark_owned:no",
                 ),
             ],
-            [InlineKeyboardButton(text=MAIN_MENU_LABEL, callback_data="cancel")],
+            [InlineKeyboardButton(text="↩️ Отмена", callback_data="cancel")],
         ]
-    )
-
-
-TIERLIST_NAME_PROMPT = (
-    f"Введите название коллажа (до <b>{TIERLIST_TITLE_MAX}</b> символов).\n"
-    "Короткое имя — на коллаже и в подписи к файлу.\n"
-    "Если не нужно — отправьте <code>null</code>.\n\n"
-    "<i>Не вставляйте сюда список артикулов — их введёте на следующем шаге.</i>"
-)
-
-
-async def _prompt_tierlist_name(message: types.Message) -> None:
-    await message.answer(TIERLIST_NAME_PROMPT, parse_mode="HTML", reply_markup=nav_kb())
-
-
-@router.callback_query(lambda cb: cb.data == "tierlist_menu")
-async def cb_tierlist_menu(call: types.CallbackQuery, state: FSMContext) -> None:
-    if not await ensure_access(call, "tierlist"):
-        return
-    await state.clear()
-    await call.answer()
-    telegram_id = str(call.from_user.id)
-    role = await get_user_role(telegram_id)
-    used, limit = get_tierlist_usage(telegram_id, role)
-    text = (
-        "🖼 <b>Коллаж</b>\n\n"
-        "• <b>Создать коллаж</b> — выбрать фигурки и собрать tier‑лист.\n"
-        "• <b>Коллаж коллекции</b> — все фигурки из вашей коллекции."
-    )
-    if limit is not None:
-        text += f"\n\n📊 Сегодня: <b>{used}/{limit}</b> коллажей (лимит в сутки)."
-    await safe_edit_or_answer(
-        call.message,
-        text,
-        parse_mode="HTML",
-        reply_markup=tierlist_menu_kb(),
-    )
-
-
-@router.callback_query(lambda cb: cb.data == "tierlist_back_name")
-async def cb_tierlist_back_name(call: types.CallbackQuery, state: FSMContext) -> None:
-    if not await ensure_access(call, "tierlist"):
-        return
-    await call.answer()
-    await state.set_state(CreateTierList.waiting_name_list)
-    await call.message.answer(
-        TIERLIST_NAME_PROMPT,
-        parse_mode="HTML",
-        reply_markup=nav_kb(back="tierlist_menu"),
-    )
-
-
-@router.callback_query(lambda cb: cb.data == "tierlist_back_mode")
-async def cb_tierlist_back_mode(call: types.CallbackQuery, state: FSMContext) -> None:
-    if not await ensure_access(call, "tierlist"):
-        return
-    await call.answer()
-    role = await get_user_role(str(call.from_user.id))
-    await state.set_state(CreateTierList.waiting_mode)
-    await call.message.answer(
-        "Как собрать коллаж?",
-        reply_markup=tierlist_mode_kb(role),
     )
 
 
@@ -172,8 +102,9 @@ PARSE_MODE_FEATURE = {
 
 MODE_HINTS = {
     "serials": (
-        "Введите <b>артикулы</b> через пробел, запятую или «;»:\n"
-        "<code>sw0001a sh0689 85863pb101</code>"
+        "Введите <b>артикулы</b> через пробел, запятую или с новой строки:\n"
+        "<code>sw0001a sw0002</code>\n"
+        "или <code>sw0001a, sw0002</code>"
     ),
     "keyword": (
         "Введите <b>ключевые слова</b> для поиска по названию:\n"
@@ -191,29 +122,6 @@ def parse_serials_only(text: str) -> tuple[str, list[str]] | None:
     if serials is not None:
         return ("serials", serials)
     return None
-
-
-def _dedupe_records_with_counts(records: list[dict]) -> tuple[list[dict], list[str]]:
-    uniq: list[dict] = []
-    counts: dict[str, int] = {}
-    by_id: dict[str, dict] = {}
-    for rec in records:
-        bid = (rec.get("bricklink_id") or "").strip().lower()
-        if not bid:
-            continue
-        counts[bid] = counts.get(bid, 0) + 1
-        if bid not in by_id:
-            by_id[bid] = rec
-            uniq.append(rec)
-    for rec in uniq:
-        bid = (rec.get("bricklink_id") or "").strip().lower()
-        cnt = counts.get(bid, 1)
-        if cnt > 1:
-            rec["repeat_count"] = cnt
-        else:
-            rec.pop("repeat_count", None)
-    duplicates = [f"{bid} ×{cnt}" for bid, cnt in counts.items() if cnt > 1]
-    return uniq, duplicates
 
 
 async def _owned_ids(telegram_id: str, mark_owned: bool) -> frozenset[str] | None:
@@ -270,17 +178,6 @@ async def _deliver_tierlist(
     caption_label = pending.get("caption_label") or ""
     kb = await get_main_keyboard(telegram_id)
     owned = await _owned_ids(telegram_id, mark_owned)
-    records, duplicates = _dedupe_records_with_counts(records)
-    if duplicates:
-        preview = ", ".join(duplicates[:10])
-        more = "" if len(duplicates) <= 10 else f" (+{len(duplicates) - 10})"
-        await message.answer(
-            "ℹ️ Повторы в tier-листе (на коллаже — <b>×N</b> у артикула):\n"
-            f"<code>{preview}{more}</code>",
-            parse_mode="HTML",
-        )
-
-    title = normalize_tierlist_title(title, figure_count=len(records))
 
     role = await get_user_role(telegram_id)
     records, dropped = cap_tierlist_records(records, role)
@@ -370,32 +267,18 @@ async def cb_start_tierlist(call: types.CallbackQuery, state: FSMContext):
         await _notify_stale_button(call, "Это старое меню.")
         return
     await call.message.answer(
-        TIERLIST_NAME_PROMPT,
-        parse_mode="HTML",
-        reply_markup=nav_kb(back="tierlist_menu"),
+        "Введите название вашего Tier List.\n"
+        "Если не нужно — отправьте `null`.",
+        parse_mode="Markdown",
     )
     await state.set_state(CreateTierList.waiting_name_list)
 
 
 @router.message(CreateTierList.waiting_name_list)
 async def on_name_entered(message: types.Message, state: FSMContext):
-    name = (message.text or "").strip()
+    name = message.text.strip()
     if name.lower() == "null":
         name = None
-    elif looks_like_serial_list(name):
-        await message.answer(
-            "Похоже на список артикулов. Введите <b>короткое название</b> "
-            f"(до {TIERLIST_TITLE_MAX} символов) или <code>null</code>.",
-            parse_mode="HTML",
-        )
-        return
-    elif name and len(name) > TIERLIST_TITLE_MAX:
-        await message.answer(
-            f"Слишком длинное название ({len(name)} симв.). "
-            f"Максимум <b>{TIERLIST_TITLE_MAX}</b>.",
-            parse_mode="HTML",
-        )
-        return
     await state.update_data(title=name)
     role = await get_user_role(str(message.from_user.id))
 
@@ -411,9 +294,9 @@ async def on_name_entered(message: types.Message, state: FSMContext):
     await state.update_data(tierlist_mode="serials")
     await message.answer(
         MODE_HINTS["serials"]
-        + f"\n\nЛимит: до {MAX_SERIALS_PER_REQUEST} артикулов.",
+        + f"\n\nЛимит: до {max_serials_per_request()} артикулов.",
         parse_mode="HTML",
-        reply_markup=nav_kb(back="tierlist_back_name"),
+        reply_markup=nav_kb(),
     )
     await state.set_state(CreateTierList.waiting_serials)
 
@@ -430,13 +313,13 @@ async def cb_tierlist_mode(call: types.CallbackQuery, state: FSMContext):
     await state.update_data(tierlist_mode=mode)
     hint = MODE_HINTS.get(mode, "")
     if mode == "serials":
-        hint += f"\n\nЛимит: до {MAX_SERIALS_PER_REQUEST} артикулов."
+        hint += f"\n\nЛимит: до {max_serials_per_request()} артикулов."
     elif mode == "keyword":
         hint += (
             f"\n\nЛимит: до {TIERLIST_KEYWORD_MAX} "
-            f"(если больше {COLLAGE_BATCH_SIZE} — несколько файлов)."
+            f"(если больше {collage_batch_size()} — несколько файлов)."
         )
-    await call.message.answer(hint, parse_mode="HTML", reply_markup=nav_kb(back="tierlist_back_mode"))
+    await call.message.answer(hint, parse_mode="HTML", reply_markup=nav_kb())
     await state.set_state(CreateTierList.waiting_serials)
 
 
@@ -455,16 +338,11 @@ async def on_serials_entered(message: types.Message, state: FSMContext):
     if forced_mode == "serials":
         parsed = parse_serials_only(message.text)
         if not parsed:
-            bad = invalid_serial_tokens(message.text or "")
-            hint = (
-                "Укажите артикулы через пробел или запятую.\n"
-                "Примеры: <code>sw0001a</code>, <code>sh0689</code>, "
-                "<code>85863pb101</code>, <code>47394pb187</code>."
+            await message.answer(
+                "Только артикулы BrickLink (например <code>sw0001a</code>).",
+                parse_mode="HTML",
+                reply_markup=nav_kb(),
             )
-            if bad:
-                preview = ", ".join(f"<code>{t}</code>" for t in bad[:5])
-                hint += f"\n\nНе похоже на артикул: {preview}"
-            await message.answer(hint, parse_mode="HTML", reply_markup=nav_kb())
             return
     elif forced_mode == "keyword":
         kw = message.text.strip()
@@ -499,9 +377,10 @@ async def on_serials_entered(message: types.Message, state: FSMContext):
 
     if mode == "serials":
         serials = [s.lower() for s in payload]
-        if len(serials) > MAX_SERIALS_PER_REQUEST:
+        serials_limit = max_serials_per_request()
+        if len(serials) > serials_limit:
             await message.answer(
-                f"❗️ Максимум {MAX_SERIALS_PER_REQUEST} артикулов за раз.",
+                f"❗️ Максимум {serials_limit} артикулов за раз.",
                 reply_markup=nav_kb(),
             )
             return

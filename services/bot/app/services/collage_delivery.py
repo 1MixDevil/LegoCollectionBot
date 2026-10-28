@@ -14,7 +14,7 @@ from app.services.collage_enqueue import (
     format_queue_message,
 )
 from app.services.collage_limits import (
-    COLLAGE_BATCH_SIZE,
+    collage_batch_size,
     should_send_in_batches,
 )
 from app.services.tierlist_daily_limit import (
@@ -47,12 +47,13 @@ def _parts_from_records(
             }
         ]
 
-    total_batches = (len(records) + COLLAGE_BATCH_SIZE - 1) // COLLAGE_BATCH_SIZE
+    batch_size = collage_batch_size()
+    total_batches = (len(records) + batch_size - 1) // batch_size
     parts: list[dict[str, Any]] = []
     for batch_no, start in enumerate(
-        range(0, len(records), COLLAGE_BATCH_SIZE), start=1
+        range(0, len(records), batch_size), start=1
     ):
-        batch = records[start : start + COLLAGE_BATCH_SIZE]
+        batch = records[start : start + batch_size]
         batch_title = f"{title} {batch_no}/{total_batches}".strip()
         parts.append(
             {
@@ -115,7 +116,7 @@ async def generate_and_send_collage(
     if len(parts) > 1:
         await message.answer(
             f"📦 Большой список: <b>{len(parts)}</b> файлов "
-            f"(по {COLLAGE_BATCH_SIZE} фигурок).",
+            f"(по {collage_batch_size()} фигурок).",
             parse_mode="HTML",
         )
     return True

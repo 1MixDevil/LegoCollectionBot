@@ -1,10 +1,8 @@
 """
-Массовая загрузка минифигурок с BrickLink.
+Массовая загрузка минифигурок с BrickLink catalogList (без cookies).
 
-Универсальный путь: скан префикса через img.bricklink.com (CDN) — работает для
-любого article (poc, lor, sw…) без ручных подсказок.
-
-catalogList — ускорение при BRICKLINK_COOKIES; ARTICLE_KEYWORD_HINTS — опционально.
+Страницы списка (catalogList.asp) открываются без сессии; отдельные карточки
+catalogitem.page часто отдают General Error — для /update используем только список.
 """
 
 from __future__ import annotations
@@ -19,7 +17,11 @@ from urllib.parse import parse_qs, urlparse
 import aiohttp
 from lxml import html
 
-from app.business.bricklink_client import build_headers, load_bricklink_cookies
+from app.business.bricklink_client import (
+    build_headers,
+    load_bricklink_cookies,
+    read_bricklink_text,
+)
 
 logger = logging.getLogger("BrickLinkCatalogList")
 
@@ -27,10 +29,27 @@ CATALOG_TREE_URL = "https://www.bricklink.com/catalogTree.asp?itemType=M"
 CATALOG_LIST_URL = "https://www.bricklink.com/catalogList.asp"
 REQUEST_DELAY = float(os.getenv("BRICKLINK_CATALOG_DELAY", "2.0"))
 
-ROW_RE = re.compile(
+# Старый HTML: catalogitem.page?M=id ... <strong>Name</strong>
+ROW_RE_LEGACY = re.compile(
     r'catalogitem\.page\?M=([a-z0-9]+)".*?<strong>([^<]+)</strong>',
     re.IGNORECASE | re.DOTALL,
 )
+# Любая ссылка на карточку с M=
+ITEM_HREF_RE = re.compile(
+    r"(?:/v2/catalog/)?catalogitem\.page\?[^\"'\s>]*[?&]M=([a-z0-9]+)",
+    re.IGNORECASE,
+)
+BOT_MARKERS = (
+    "verify that you're not a robot",
+    "enable javascript and then reload",
+    "attention required",
+    "cf-browser-verification",
+    "general error",
+    "403 forbidden",
+    "<title>403",
+)
+MIN_USEFUL_HTML = 1500
+
 
 _cat_cache: dict[str, str] = {}
 _tree_cache: Optional[str] = None
@@ -46,7 +65,7 @@ GENERIC_THEME_NAMES = frozenset({
     "holiday & event",
 })
 
-# Опционально: ускоряют поиск catString при наличии cookies (не обязательны)
+# Подсказки: article → фразы в названии категории BrickLink (ускоряют поиск)
 ARTICLE_KEYWORD_HINTS: dict[str, list[str]] = {
     "sw": ["star wars"],
     "lor": ["lord of the rings", "hobbit", "lotr"],
@@ -62,7 +81,7 @@ ARTICLE_KEYWORD_HINTS: dict[str, list[str]] = {
     "crs": ["cars"],
     "bob": ["spongebob"],
     "iaj": ["indiana jones"],
-    "poc": ["pirates of the caribbean"],
+    "mon": ["monkey island", "pirates"],
     "mk": ["monkie kid"],
     "dun": ["dune"],
     "ani": ["animal crossing"],
@@ -72,10 +91,6 @@ ARTICLE_KEYWORD_HINTS: dict[str, list[str]] = {
 
 MAX_CATALOG_PAGES = int(os.getenv("BRICKLINK_CATALOG_MAX_PAGES", "80"))
 MAX_CAT_SCAN = int(os.getenv("BRICKLINK_CAT_SCAN_LIMIT", "80"))
-CDN_GAP = int(os.getenv("BRICKLINK_CDN_GAP", "12"))
-CDN_MAX_NUM = int(os.getenv("BRICKLINK_CDN_MAX_NUM", "150"))
-CDN_BATCH = int(os.getenv("BRICKLINK_CDN_BATCH", "10"))
-CDN_CONCURRENCY = int(os.getenv("BRICKLINK_CDN_CONCURRENCY", "8"))
 
 
 def _theme_name_usable(theme_name: Optional[str]) -> bool:
@@ -87,25 +102,123 @@ def _theme_name_usable(theme_name: Optional[str]) -> bool:
 def _normalize_name(raw: str) -> str:
     import html as html_module
 
-    return html_module.unescape(raw).strip()
+    return re.sub(r"\s+", " ", html_module.unescape(raw)).strip()
 
 
-def parse_catalog_list_page(html: str, article: str) -> list[tuple[str, str]]:
-    """Пары (bricklink_id, name) с одной страницы списка."""
+def _is_bot_wall(html_text: str) -> bool:
+    low = html_text.lower()
+    return any(m in low for m in BOT_MARKERS)
+
+
+class BrickLinkBlockedError(RuntimeError):
+    """BrickLink отдал anti-bot / General Error вместо каталога."""
+
+
+def parse_catalog_list_page(html_text: str, article: str) -> list[tuple[str, str]]:
+    """Пары (bricklink_id, name) с одной страницы списка (старый и новый HTML)."""
     article = article.lower()
+    if _is_bot_wall(html_text):
+        raise BrickLinkBlockedError(
+            "BrickLink вернул anti-bot / General Error. "
+            "Обновите BRICKLINK_COOKIES в .env (BLNEWSESSIONID + aws-waf-token из браузера)."
+        )
+
     seen: set[str] = set()
     out: list[tuple[str, str]] = []
 
-    for match in ROW_RE.finditer(html):
-        item_id = match.group(1).lower()
-        if not item_id.startswith(article):
-            continue
-        if item_id in seen:
-            continue
+    def _add(item_id: str, name: str) -> None:
+        item_id = item_id.lower().strip()
+        name = _normalize_name(name)
+        if not item_id.startswith(article) or item_id in seen:
+            return
+        if not name or name.lower() == item_id:
+            name = item_id
         seen.add(item_id)
-        name = _normalize_name(match.group(2))
-        if name:
-            out.append((item_id, name))
+        out.append((item_id, name))
+
+    # 1) Современный список: table.catalog-list__body-main
+    try:
+        doc = html.fromstring(html_text)
+    except Exception:
+        doc = None
+
+    if doc is not None:
+        rows = doc.xpath(
+            "//table[contains(@class,'catalog-list')]//tr"
+            " | //form[@id='ItemEditForm']//table//tr"
+        )
+        for tr in rows:
+            links = tr.xpath(
+                ".//a[contains(@href,'catalogitem.page') or contains(@href,'catalogItem')]"
+            )
+            if not links:
+                continue
+            href = links[0].get("href") or ""
+            m = re.search(r"[?&]M=([a-z0-9]+)", href, re.I)
+            if not m:
+                # Иногда код только в тексте ссылки
+                code_txt = " ".join(links[0].itertext()).strip()
+                m2 = re.match(r"^([a-z][a-z0-9]*\d+[a-z]?)$", code_txt, re.I)
+                if not m2:
+                    continue
+                item_id = m2.group(1)
+            else:
+                item_id = m.group(1)
+
+            tds = tr.xpath("./td")
+            name = ""
+            if len(tds) >= 3:
+                name = " ".join(tds[2].itertext()).strip()
+            if not name:
+                # ссылка с названием, код в другом месте
+                for a in links:
+                    txt = " ".join(a.itertext()).strip()
+                    if txt and txt.lower() != item_id.lower():
+                        name = txt
+                        break
+            if not name and len(tds) >= 2:
+                name = " ".join(tds[1].itertext()).strip()
+            _add(item_id, name or item_id)
+
+        if out:
+            return out
+
+        # 2) Любые ссылки на карточки + ближайший текст
+        for a in doc.xpath(
+            "//a[contains(@href,'catalogitem.page') or contains(@href,'catalogItem.page')]"
+        ):
+            href = a.get("href") or ""
+            m = re.search(r"[?&]M=([a-z0-9]+)", href, re.I)
+            if not m:
+                continue
+            item_id = m.group(1)
+            name = " ".join(a.itertext()).strip()
+            if not name or name.lower() == item_id.lower():
+                parent = a.getparent()
+                if parent is not None:
+                    # следующий td / strong рядом
+                    strongs = parent.xpath(".//strong")
+                    if strongs:
+                        name = " ".join(strongs[0].itertext()).strip()
+                    else:
+                        sib = parent.getnext()
+                        if sib is not None:
+                            name = " ".join(sib.itertext()).strip()
+            _add(item_id, name or item_id)
+
+        if out:
+            return out
+
+    # 3) Legacy regex
+    for match in ROW_RE_LEGACY.finditer(html_text):
+        _add(match.group(1), match.group(2))
+
+    if out:
+        return out
+
+    # 4) Последний шанс: все M=id на странице, имя = id
+    for match in ITEM_HREF_RE.finditer(html_text):
+        _add(match.group(1), match.group(1))
 
     return out
 
@@ -185,42 +298,53 @@ async def _fetch_text(
     *,
     retries: int = 3,
 ) -> str:
-    cookies = load_bricklink_cookies()
+    cookies = load_bricklink_cookies() or None
+    last_err: Exception | None = None
     for attempt in range(retries):
         if REQUEST_DELAY > 0:
             await asyncio.sleep(REQUEST_DELAY)
-        async with session.get(
-            url,
-            params=params,
-            headers=build_headers(),
-            cookies=cookies or None,
-            timeout=aiohttp.ClientTimeout(total=60),
-        ) as resp:
-            if resp.status == 429:
-                wait = 5 * (attempt + 1)
-                logger.warning("BrickLink 429, ждём %s сек", wait)
-                await asyncio.sleep(wait)
-                continue
-            text = await resp.text()
-            if resp.status in (202, 403) or len(text) < 500:
-                wait = 5 * (attempt + 1)
-                logger.warning(
-                    "BrickLink catalogList blocked/empty (HTTP %s, %s bytes), retry %s",
-                    resp.status,
+        try:
+            async with session.get(
+                url,
+                params=params,
+                headers=build_headers(),
+                cookies=cookies,
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as resp:
+                status = resp.status
+                text = await read_bricklink_text(resp)
+                logger.info(
+                    "BrickLink GET %s params=%s -> HTTP %s, %s bytes",
+                    url.split("?")[0],
+                    params,
+                    status,
                     len(text),
-                    attempt + 1,
                 )
-                if attempt < retries - 1:
+                if status == 429 or "quota exceeded" in text.lower() or "error.page?code=429" in str(
+                    resp.url
+                ):
+                    wait = 10 * (attempt + 1)
+                    logger.warning("BrickLink quota/429, ждём %s сек", wait)
                     await asyncio.sleep(wait)
                     continue
-                return ""
-            if "quota exceeded" in text.lower() or "error.page?code=429" in str(resp.url):
-                wait = 10 * (attempt + 1)
-                logger.warning("BrickLink quota, ждём %s сек", wait)
-                await asyncio.sleep(wait)
-                continue
-            resp.raise_for_status()
-            return text
+                if status in (403, 503) or _is_bot_wall(text) or len(text) < MIN_USEFUL_HTML:
+                    raise BrickLinkBlockedError(
+                        f"BrickLink недоступен (HTTP {status}, {len(text)} байт). "
+                        "Включите VPN на сервере или задайте свежие BRICKLINK_COOKIES "
+                        "(BLNEWSESSIONID + aws-waf-token). Куки раньше не были обязательны — "
+                        "сейчас BrickLink чаще режет датацентры."
+                    )
+                if status >= 400:
+                    resp.raise_for_status()
+                return text
+        except BrickLinkBlockedError:
+            raise
+        except Exception as exc:
+            last_err = exc
+            logger.warning("BrickLink fetch attempt %s failed: %s", attempt + 1, exc)
+            await asyncio.sleep(2 * (attempt + 1))
+    if last_err:
+        raise RuntimeError(f"BrickLink: не удалось загрузить страницу: {last_err}") from last_err
     raise RuntimeError("BrickLink: превышен лимит запросов (429)")
 
 
@@ -231,202 +355,6 @@ def _keyword_hints(article: str, theme_name: Optional[str] = None) -> list[str]:
         if theme_lower not in GENERIC_THEME_NAMES and theme_lower not in hints:
             hints.append(theme_lower)
     return hints
-
-
-def _resolve_cat_from_hints(tree_html: str, article: str) -> tuple[Optional[str], Optional[str]]:
-    """Категория из дерева BrickLink по опциональным подсказкам."""
-    article = article.lower()
-    hints = ARTICLE_KEYWORD_HINTS.get(article, [])
-    if not hints:
-        return None, None
-
-    matches = [
-        (cat, label)
-        for cat, label in _all_categories_from_tree(tree_html)
-        if any(h in label.lower() for h in hints)
-    ]
-    if not matches:
-        return None, None
-
-    def rank(pair: tuple[str, str]) -> tuple[int, int]:
-        label_lower = pair[1].lower()
-        best = max((len(h) for h in hints if h in label_lower), default=0)
-        return (best, -len(pair[0]))
-
-    matches.sort(key=rank, reverse=True)
-    return matches[0]
-
-
-CDN_MIN_BYTES = 800
-
-
-async def _cdn_minifig_exists(session: aiohttp.ClientSession, item_id: str) -> bool:
-    url = f"https://img.bricklink.com/ItemImage/MN/0/{item_id.lower()}.png"
-    try:
-        async with session.get(
-            url,
-            headers=build_headers(),
-            timeout=aiohttp.ClientTimeout(total=20),
-        ) as resp:
-            if resp.status != 200:
-                return False
-            data = await resp.read()
-            return len(data) >= CDN_MIN_BYTES
-    except Exception:
-        return False
-
-
-async def _scan_minifigs_via_cdn(
-    session: aiohttp.ClientSession,
-    article: str,
-    *,
-    pad_len: int = 3,
-    max_num: int = CDN_MAX_NUM,
-) -> list[str]:
-    """Линейный скан (legacy). Предпочтительнее _discover_minifigs_via_cdn_smart."""
-    article = article.lower()
-    found: list[str] = []
-    for num in range(1, max_num + 1):
-        item_id = f"{article}{num:0{pad_len}d}"
-        if await _cdn_minifig_exists(session, item_id):
-            found.append(item_id)
-    return found
-
-
-def _sort_item_ids(ids: list[str]) -> list[str]:
-    def key(iid: str) -> tuple[str, int, str]:
-        m = re.search(r"(\d+)", iid)
-        return (iid[: m.start()] if m else iid, int(m.group(1)) if m else 0, iid)
-
-    return sorted(ids, key=key)
-
-
-async def _discover_minifigs_via_cdn_smart(
-    session: aiohttp.ClientSession,
-    article: str,
-) -> tuple[list[str], int]:
-    """
-    Универсальный поиск серии: префикс + номер на CDN BrickLink.
-    Останавливается после CDN_GAP пустых номеров подряд.
-    """
-    article = article.lower()
-    sem = asyncio.Semaphore(max(1, CDN_CONCURRENCY))
-
-    async def exists(num: int, pad_len: int) -> Optional[str]:
-        item_id = f"{article}{num:0{pad_len}d}"
-        async with sem:
-            if await _cdn_minifig_exists(session, item_id):
-                return item_id
-        return None
-
-    for pad_len in (3, 4, 2):
-        found: list[str] = []
-        misses = 0
-        num = 1
-        while num <= CDN_MAX_NUM:
-            batch = range(num, min(num + CDN_BATCH, CDN_MAX_NUM + 1))
-            results = await asyncio.gather(*(exists(n, pad_len) for n in batch))
-            batch_found = [r for r in results if r]
-            if batch_found:
-                found.extend(batch_found)
-                misses = 0
-            elif found:
-                misses += len(batch)
-                if misses >= CDN_GAP:
-                    break
-            num += CDN_BATCH
-        if found:
-            return _sort_item_ids(found), pad_len
-    return [], 3
-
-
-def _series_label_from_api(sample_id: str) -> Optional[str]:
-    try:
-        from app.business.bricklink_api import (
-            BrickLinkItemNotFound,
-            api_credentials_configured,
-            get_catalog_item,
-            get_category_name,
-        )
-
-        if not api_credentials_configured():
-            return None
-        item = get_catalog_item(sample_id)
-        cat_id = item.extra.get("category_id")
-        if cat_id:
-            return get_category_name(int(cat_id))
-    except BrickLinkItemNotFound:
-        pass
-    except Exception:
-        logger.debug("series label from API failed for %s", sample_id, exc_info=True)
-    return None
-
-
-async def _resolve_series_label(
-    session: aiohttp.ClientSession,
-    article: str,
-    sample_id: str,
-    theme_name: Optional[str],
-) -> str:
-    if theme_name and _theme_name_usable(theme_name):
-        return theme_name.strip()
-
-    label = _series_label_from_api(sample_id)
-    if label:
-        return label
-
-    if load_bricklink_cookies():
-        cat, hint_label = await _try_resolve_cat_optional(session, article, theme_name)
-        if hint_label:
-            return hint_label
-
-    return article.upper()
-
-
-async def _try_resolve_cat_optional(
-    session: aiohttp.ClientSession,
-    article: str,
-    theme_name: Optional[str] = None,
-    *,
-    cached_cat: Optional[str] = None,
-) -> tuple[Optional[str], Optional[str]]:
-    """catString через catalogList — только если есть cookies (ускорение, не обязательно)."""
-    if not load_bricklink_cookies():
-        return None, None
-    return await resolve_cat_string(
-        session,
-        article,
-        theme_name,
-        cached_cat=cached_cat,
-        catalog_only=True,
-    )
-
-
-def _resolve_item_name(item_id: str) -> str:
-    try:
-        from app.business.bricklink_api import (
-            BrickLinkItemNotFound,
-            api_credentials_configured,
-            get_catalog_item,
-        )
-
-        if api_credentials_configured():
-            item = get_catalog_item(item_id)
-            return item.name or item_id
-    except BrickLinkItemNotFound:
-        pass
-    except Exception:
-        logger.debug("API name lookup failed for %s", item_id, exc_info=True)
-    return item_id
-
-
-async def _fetch_minifigs_via_cdn_scan(
-    session: aiohttp.ClientSession,
-    article: str,
-    pad_len: int = 3,
-) -> list[tuple[str, str]]:
-    ids, _ = await _discover_minifigs_via_cdn_smart(session, article)
-    return [(iid, _resolve_item_name(iid)) for iid in ids]
 
 
 def _categories_to_scan(
@@ -531,11 +459,10 @@ async def resolve_cat_string(
     theme_name: Optional[str] = None,
     *,
     cached_cat: Optional[str] = None,
-    catalog_only: bool = False,
 ) -> tuple[Optional[str], Optional[str]]:
     """
-    catString для catalogList (нужны cookies). Для новых серий не обязателен —
-    основной путь: CDN-скан по префиксу.
+    Находит catString только по BrickLink (дерево + скан префикса).
+    Возвращает (catString, название категории).
     """
     article = article.lower()
     if article in _cat_cache:
@@ -565,31 +492,6 @@ async def resolve_cat_string(
     global _tree_cache
     if _tree_cache is None:
         _tree_cache = await _fetch_text(session, CATALOG_TREE_URL, {})
-
-    hint_cat, hint_label = _resolve_cat_from_hints(_tree_cache, article)
-    if hint_cat:
-        count = await _count_items_on_page(session, hint_cat, article)
-        if count >= 1:
-            _cat_cache[article] = hint_cat
-            logger.info(
-                "[%s] BrickLink catString=%s («%s», %s на 1-й стр.)",
-                article,
-                hint_cat,
-                hint_label or "?",
-                count,
-            )
-            return hint_cat, hint_label
-        cdn_ids = await _scan_minifigs_via_cdn(session, article, max_num=12)
-        if cdn_ids:
-            _cat_cache[article] = hint_cat
-            logger.info(
-                "[%s] CDN fallback: catString=%s («%s», %s минифигурок)",
-                article,
-                hint_cat,
-                hint_label or "?",
-                len(cdn_ids),
-            )
-            return hint_cat, hint_label
 
     best_cat: Optional[str] = None
     best_label: Optional[str] = None
@@ -630,19 +532,7 @@ async def resolve_cat_string(
         )
         return best_cat, best_label
 
-    if catalog_only:
-        return None, None
-
-    cdn_ids, _ = await _discover_minifigs_via_cdn_smart(session, article)
-    if cdn_ids:
-        logger.info(
-            "[%s] catalogList недоступен, серия подтверждена CDN (%s шт.)",
-            article,
-            len(cdn_ids),
-        )
-        return None, None
-
-    logger.warning("[%s] Серия не найдена (ни catalogList, ни CDN)", article)
+    logger.warning("[%s] Категория BrickLink не найдена", article)
     return None, None
 
 
@@ -660,31 +550,50 @@ async def discover_series_metadata(
     theme_name: Optional[str] = None,
 ) -> Optional[dict[str, object]]:
     """
-    Метаданные серии для type_of_collect.
-    Универсально: любой префикс BrickLink через CDN, без ручных подсказок.
+    Метаданные серии для type_of_collect, если записи ещё нет в БД.
+    Сначала поиск q=article (надёжнее дерева категорий).
     """
     article = article.strip().lower()
     async with aiohttp.ClientSession() as session:
-        ids, pad_len = await _discover_minifigs_via_cdn_smart(session, article)
-        if not ids:
-            logger.warning("[%s] CDN: ни одной минифигурки с таким префиксом", article)
+        sample_html = await _fetch_text(
+            session,
+            CATALOG_LIST_URL,
+            {"catType": "M", "q": article, "pageSize": 50, "pg": 1},
+        )
+        items = parse_catalog_list_page(sample_html, article)
+        cat, label = None, None
+        if not items:
+            cat, label = await resolve_cat_string(session, article, theme_name)
+            if cat:
+                sample_html = await _fetch_text(
+                    session,
+                    CATALOG_LIST_URL,
+                    {
+                        "catType": "M",
+                        "catString": cat,
+                        "pageSize": 50,
+                        "pg": 1,
+                    },
+                )
+                items = parse_catalog_list_page(sample_html, article)
+        else:
+            # параллельно узнаём catString для кэша, но не валимся если дерево закрыто
+            try:
+                cat, label = await resolve_cat_string(session, article, theme_name)
+            except BrickLinkBlockedError:
+                logger.warning("[%s] дерево категорий недоступно, оставляем только поиск", article)
+                cat, label = None, theme_name or article.upper()
+
+        if not items:
             return None
 
-        label = await _resolve_series_label(session, article, ids[0], theme_name)
-        cat, _ = await _try_resolve_cat_optional(session, article, theme_name)
-
-        logger.info(
-            "[%s] серия найдена: %s шт., pad=%s, name=%r",
-            article,
-            len(ids),
-            pad_len,
-            label,
-        )
+        ids = [item_id for item_id, _ in items]
+        hint_name = (ARTICLE_KEYWORD_HINTS.get(article) or [article])[0]
         return {
-            "name": label,
-            "pad_len": pad_len,
+            "name": label or (theme_name or hint_name.title()),
+            "pad_len": infer_pad_len(ids, article),
             "cat_string": cat,
-            "sample_count": len(ids),
+            "sample_count": len(items),
         }
 
 
@@ -697,72 +606,85 @@ async def fetch_minifigs_by_article(
     delay_sec: float = 0.5,
 ) -> tuple[list[tuple[str, str]], Optional[str], Optional[str]]:
     """
-    Все минифигурки серии по префиксу BrickLink (sw, hp, sim, …) из catalogList.
-    Возвращает (records, catString, category_label).
+    Все минифигурки серии по префиксу BrickLink (sw, hp, njo, …).
+
+    Порядок (намеренно):
+    1) поиск q=article — работает без точной категории;
+    2) категория catString — добирает полный список.
+    Куки не обязательны; при 403/anti-bot будет явная ошибка.
     """
     article = article.strip().lower()
     collected: dict[str, str] = {}
     resolved_cat: Optional[str] = None
     resolved_label: Optional[str] = None
 
-    async with aiohttp.ClientSession() as session:
-        ids, pad_len = await _discover_minifigs_via_cdn_smart(session, article)
-        if not ids:
-            return [], None, None
+    async def _paginate(params_base: dict, label: str) -> int:
+        nonlocal collected
+        page = 1
+        added_total = 0
+        while page <= MAX_CATALOG_PAGES:
+            before = len(collected)
+            params = {**params_base, "pageSize": page_size, "pg": page}
+            html_text = await _fetch_text(session, CATALOG_LIST_URL, params)
+            batch = parse_catalog_list_page(html_text, article)
+            for item_id, name in batch:
+                collected[item_id] = name
 
-        for item_id in ids:
-            collected[item_id] = _resolve_item_name(item_id)
-
-        cat, label = await _try_resolve_cat_optional(
-            session,
-            article,
-            theme_name or None,
-            cached_cat=bricklink_cat,
-        )
-        resolved_cat = cat
-        resolved_label = label
-
-        if cat and load_bricklink_cookies():
-            page = 1
-            while page <= MAX_CATALOG_PAGES:
-                before = len(collected)
-                html_text = await _fetch_text(
-                    session,
-                    CATALOG_LIST_URL,
-                    {
-                        "catType": "M",
-                        "catString": cat,
-                        "pageSize": page_size,
-                        "pg": page,
-                    },
-                )
-                if not html_text:
-                    break
-                batch = parse_catalog_list_page(html_text, article)
-                for item_id, name in batch:
-                    collected[item_id] = name
-
-                added = len(collected) - before
-                logger.info(
-                    "[%s] BrickLink catalogList стр.%s: +%s новых (на стр. %s, всего %s)",
-                    article,
-                    page,
-                    added,
-                    len(batch),
-                    len(collected),
-                )
-
-                if not batch or added == 0:
-                    break
-                page += 1
-                if delay_sec > 0 and REQUEST_DELAY <= 0:
-                    await asyncio.sleep(delay_sec)
-        else:
+            added = len(collected) - before
+            added_total += added
             logger.info(
-                "[%s] загрузка через CDN: %s шт. (pad=%s)",
+                "[%s] %s стр.%s: +%s (на стр. %s, всего %s)",
                 article,
+                label,
+                page,
+                added,
+                len(batch),
                 len(collected),
-                pad_len,
             )
+            if not batch or added == 0:
+                break
+            page += 1
+            if delay_sec > 0 and REQUEST_DELAY <= 0:
+                await asyncio.sleep(delay_sec)
+        return added_total
+
+    async with aiohttp.ClientSession() as session:
+        # 1) Поиск по префиксу — основной путь
+        await _paginate({"catType": "M", "q": article}, "search")
+
+        # 2) Категория — дополнение (если доступна)
+        try:
+            cat, label = await resolve_cat_string(
+                session,
+                article,
+                theme_name or None,
+                cached_cat=bricklink_cat,
+            )
+        except BrickLinkBlockedError as exc:
+            logger.warning("[%s] категорию не удалось открыть: %s", article, exc)
+            cat, label = None, None
+
+        if cat:
+            resolved_cat = cat
+            resolved_label = label
+            before = len(collected)
+            await _paginate({"catType": "M", "catString": cat}, f"cat:{cat}")
+            logger.info(
+                "[%s] после категории cat=%s: было %s, стало %s",
+                article,
+                cat,
+                before,
+                len(collected),
+            )
+
+        if not collected:
+            logger.error(
+                "[%s] 0 минифигурок после search+category (cat=%s, theme=%s)",
+                article,
+                resolved_cat,
+                theme_name,
+            )
+        elif not resolved_label:
+            resolved_label = theme_name or article.upper()
 
     return sorted(collected.items()), resolved_cat, resolved_label

@@ -9,15 +9,10 @@ from typing import Any
 
 from app.celery_app import celery_app
 from app.services.collage_build import build_caption, sync_build_collage
-from app.services.collage_limits import COLLAGE_BATCH_SIZE
-from app.services.telegram_send import (
-    send_document_sync,
-    send_message_sync,
-    send_photo_sync,
-)
+from app.services.collage_limits import collage_batch_size, should_send_as_document
+from app.services.telegram_send import send_collage_sync, send_message_sync
 
 logger = logging.getLogger(__name__)
-PHOTO_SEND_MAX_FIGURES = 40
 
 
 def _owned_frozenset(raw: list[str] | None) -> frozenset[str] | None:
@@ -40,6 +35,9 @@ def process_collage_job(self, payload: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
 
     try:
+        from app.api.auth import get_collage_watermark_sync
+
+        watermark_text = get_collage_watermark_sync()
         for idx, part in enumerate(parts, start=1):
             records = part.get("records") or []
             title = part.get("title") or ""
@@ -52,6 +50,7 @@ def process_collage_job(self, payload: dict[str, Any]) -> dict[str, Any]:
                 telegram_id,
                 title,
                 owned_ids=owned,
+                watermark_text=watermark_text,
             )
             if not built:
                 errors.append(f"part {idx}: no images")
@@ -62,14 +61,13 @@ def process_collage_job(self, payload: dict[str, Any]) -> dict[str, Any]:
                 caption_prefix, title, caption_extra, records, owned
             )
             try:
-                if len(records) <= PHOTO_SEND_MAX_FIGURES:
-                    try:
-                        send_photo_sync(chat_id, file_path, caption, filename=filename)
-                    except Exception:
-                        logger.exception("sendPhoto failed, fallback to document")
-                        send_document_sync(chat_id, file_path, caption, filename=filename)
-                else:
-                    send_document_sync(chat_id, file_path, caption, filename=filename)
+                send_collage_sync(
+                    chat_id,
+                    file_path,
+                    caption,
+                    filename=filename,
+                    as_document=should_send_as_document(len(records)),
+                )
                 sent += 1
             finally:
                 try:
@@ -97,7 +95,7 @@ def process_collage_job(self, payload: dict[str, Any]) -> dict[str, Any]:
             send_message_sync(
                 chat_id,
                 "❌ Ошибка при сборке коллажа на сервере. Попробуйте позже или "
-                f"уменьшите список (батч {COLLAGE_BATCH_SIZE} фиг.).",
+                f"уменьшите список (батч {collage_batch_size()} фиг.).",
             )
         except Exception:
             logger.exception("failed to notify user about collage error")

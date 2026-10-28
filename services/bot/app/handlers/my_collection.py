@@ -31,7 +31,7 @@ from app.services.collection_stats import (
 )
 from app.services.collage import StarWarsCollageGenerator
 from app.services.collage_delivery import send_collage_batches
-from app.services.collage_limits import COLLAGE_BATCH_SIZE, should_send_in_batches
+from app.services.collage_limits import collage_batch_size, should_send_in_batches
 from app.services.figure_display import send_figure_card_with_loading
 from app.states.figures import CollectionState
 from app.utils.message import safe_edit_or_answer
@@ -404,7 +404,7 @@ async def cb_collection_tierlist(call: types.CallbackQuery) -> None:
     if should_send_in_batches(total):
         await call.message.answer(
             f"В коллекции <b>{total}</b> записей — отправлю коллаж "
-            f"частями по <b>{COLLAGE_BATCH_SIZE}</b> фигурок.",
+            f"частями по <b>{collage_batch_size()}</b> фигурок.",
             parse_mode="HTML",
         )
 
