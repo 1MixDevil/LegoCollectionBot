@@ -54,11 +54,11 @@ def format_update_result(article: str, result: dict) -> str:
 
     if status == "blocked":
         return (
-            f"🚫 Серия <code>{article}</code>: BrickLink недоступен с сервера.\n"
+            f"🚫 Серия <code>{article}</code>: каталог временно недоступен.\n"
             f"{message}\n\n"
-            "Обычно помогает VPN на сервере или свежие "
-            "<code>BRICKLINK_COOKIES</code> в .env "
-            "(раньше куки не нужны были — сейчас датацентры режут чаще)."
+            "По умолчанию /update берёт CSV Rebrickable (без WAF). "
+            "Проверьте <code>CATALOG_DATA_SOURCE=rebrickable</code> и сеть "
+            "до cdn.rebrickable.com. HTML BrickLink с VPS часто режет AWS WAF."
         )
 
     return (

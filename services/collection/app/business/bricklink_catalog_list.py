@@ -327,12 +327,25 @@ async def _fetch_text(
                     logger.warning("BrickLink quota/429, ждём %s сек", wait)
                     await asyncio.sleep(wait)
                     continue
-                if status in (403, 503) or _is_bot_wall(text) or len(text) < MIN_USEFUL_HTML:
+                waf = (
+                    status == 202
+                    or bool(resp.headers.get("x-amzn-waf-action"))
+                    or "gokuprops" in text.lower()
+                    or "challenge.js" in text.lower()
+                )
+                if (
+                    status in (202, 403, 503)
+                    or waf
+                    or _is_bot_wall(text)
+                    or len(text) < MIN_USEFUL_HTML
+                ):
                     raise BrickLinkBlockedError(
-                        f"BrickLink недоступен (HTTP {status}, {len(text)} байт). "
-                        "Включите VPN на сервере или задайте свежие BRICKLINK_COOKIES "
-                        "(BLNEWSESSIONID + aws-waf-token). Куки раньше не были обязательны — "
-                        "сейчас BrickLink чаще режет датацентры."
+                        f"BrickLink недоступен (HTTP {status}, {len(text)} байт"
+                        f"{', AWS WAF challenge' if waf or status == 202 else ''}). "
+                        "Для /update по умолчанию используется Rebrickable CSV "
+                        "(CATALOG_DATA_SOURCE=rebrickable). "
+                        "HTML BrickLink: VPN/residential IP или свежие "
+                        "BRICKLINK_COOKIES (BLNEWSESSIONID + aws-waf-token)."
                     )
                 if status >= 400:
                     resp.raise_for_status()

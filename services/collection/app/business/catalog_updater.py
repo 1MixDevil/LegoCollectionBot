@@ -107,17 +107,39 @@ def insert_figures(
 
 async def ensure_collect_type(db: Session, article: str) -> CollectType:
     """
-    Возвращает type_of_collect для префикса; создаёт запись, если серия есть на BrickLink.
+    Возвращает type_of_collect для префикса; создаёт запись, если серия есть
+    в дампе Rebrickable (BL id) или на BrickLink.
     """
     article = article.strip().lower()
     ct = db.query(CollectType).filter_by(article=article).first()
     if ct:
         return ct
 
-    meta = await discover_series_metadata(article)
+    meta = None
+    try:
+        from app.business.rebrickable_catalog_dump import discover_series_from_dump
+
+        meta = await discover_series_from_dump(article)
+    except Exception:
+        logger.warning(
+            "[%s] Rebrickable dump недоступен для метаданных серии",
+            article,
+            exc_info=True,
+        )
+
+    if not meta:
+        try:
+            meta = await discover_series_metadata(article)
+        except BrickLinkBlockedError as exc:
+            raise ValueError(
+                f"Серия «{article}»: BrickLink недоступен ({exc}). "
+                "Каталог обычно берётся из Rebrickable CSV — проверьте сеть "
+                "до cdn.rebrickable.com."
+            ) from exc
+
     if not meta:
         raise ValueError(
-            f"Серия «{article}» не найдена на BrickLink. "
+            f"Серия «{article}» не найдена. "
             "Проверьте префикс артикула (например sw, hp, poc, lor)."
         )
 
@@ -131,10 +153,11 @@ async def ensure_collect_type(db: Session, article: str) -> CollectType:
     db.commit()
     db.refresh(ct)
     logger.info(
-        "Создан type_of_collect: article=%s name=%s pad_len=%s",
+        "Создан type_of_collect: article=%s name=%s pad_len=%s source=%s",
         article,
         ct.name,
         ct.pad_len,
+        meta.get("source", "bricklink"),
     )
     return ct
 
@@ -236,10 +259,72 @@ async def sync_from_bricklink_catalog(db: Session, article: str) -> dict:
 
 async def sync_from_rebrickable(db: Session, article: str) -> dict:
     """
-    При CATALOG_DATA_SOURCE=rebrickable массовый /update идёт через BrickLink list:
-    API Rebrickable не содержит артикулов sw/hp (только fig-000001).
+    Массовое наполнение из ежедневных CSV Rebrickable + set_mappings (BL id).
+
+    Не ходит на bricklink.com → нет AWS WAF. Покрытие ≈ официальный LEGO-каталог
+    (кастомные/редкие BL-only позиции могут отсутствовать).
     """
-    return await sync_from_bricklink_catalog(db, article)
+    from app.business.rebrickable_catalog_dump import fetch_minifigs_by_prefix
+
+    article = article.strip().lower()
+    ct = await ensure_collect_type(db, article)
+
+    existing_count = (
+        db.query(Figure).filter(Figure.type_collected_id == ct.id).count()
+    )
+    logger.info(
+        "=== REBRICKABLE DUMP | article=%s | в БД: %s ===",
+        article,
+        existing_count,
+    )
+
+    try:
+        records = await fetch_minifigs_by_prefix(article)
+    except Exception as exc:
+        logger.exception("[%s] Rebrickable dump failed", article)
+        # Запасной путь — HTML BrickLink (часто 202 с VPS без VPN/cookies)
+        logger.warning("[%s] fallback → BrickLink catalogList", article)
+        fallback = await sync_from_bricklink_catalog(db, article)
+        fallback["message"] = (
+            f"Rebrickable dump недоступен ({exc}); "
+            f"fallback BrickLink: {fallback.get('message', '')}"
+        )
+        fallback["source"] = "bricklink_catalog_fallback"
+        return fallback
+
+    added = insert_figures(db, ct, records)
+
+    if not records:
+        message = (
+            f"Rebrickable: нет минифигурок с BrickLink-префиксом {article}. "
+            "Проверьте артикул (sw, hp, njo, …)."
+        )
+        status = "no_items"
+    elif added:
+        message = (
+            f"Rebrickable: {len(records)} минифигурок серии {article}, "
+            f"новых в БД: {added}"
+        )
+        status = "ok"
+    else:
+        message = (
+            f"Rebrickable: в дампе {len(records)} шт., все уже были в БД"
+        )
+        status = "no_new_items"
+
+    result = {
+        "added": added,
+        "article": article,
+        "existing_before": existing_count,
+        "scanned_found": len(records),
+        "checked_base": len(records),
+        "miss_reasons": {},
+        "status": status,
+        "source": "rebrickable_dump",
+        "message": message,
+    }
+    logger.info("=== REBRICKABLE DUMP DONE | %s ===", result)
+    return result
 
 
 def _resolve_collect_type(db: Session, set_num: str) -> CollectType | None:
@@ -301,8 +386,10 @@ async def update_catalog(
             }
 
     try:
-        if source == "rebrickable":
+        if source in ("rebrickable", "auto"):
             return await sync_from_rebrickable(db, article)
+        if source == "bricklink":
+            return await sync_from_bricklink_catalog(db, article)
 
         from app.business.parser import FastFigureUpdater
 

@@ -42,10 +42,11 @@ def api_key_configured() -> bool:
 
 
 def get_catalog_source() -> str:
-    """rebrickable | bricklink — откуда наполнять каталог."""
+    """rebrickable | bricklink | scan | auto — откуда наполнять каталог."""
     source = os.getenv("CATALOG_DATA_SOURCE", "rebrickable").strip().lower()
     if source == "auto":
-        return "rebrickable" if api_key_configured() else "bricklink"
+        # CSV-дампы не требуют API-ключа; auto = rebrickable dump
+        return "rebrickable"
     return source
 
 
