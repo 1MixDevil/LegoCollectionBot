@@ -373,10 +373,16 @@ def prompt_kb(back: str | None = None, skip: str | None = None) -> InlineKeyboar
 
 # === Существующие функции оставлены без изменений ===
 
-def make_info_kb(serial: str, *, in_collection: bool = False) -> InlineKeyboardMarkup:
+def make_info_kb(
+    serial: str,
+    *,
+    in_collection: bool = False,
+    copy_count: int = 0,
+) -> InlineKeyboardMarkup:
     """
     Клавиатура карточки фигурки.
     «Продать» и «Удалить» — только если фигурка уже в коллекции пользователя.
+    При нескольких копиях кнопка удаления уточняет, что снимается одна запись.
     """
     rows: list[list[InlineKeyboardButton]] = [
         [
@@ -391,6 +397,11 @@ def make_info_kb(serial: str, *, in_collection: bool = False) -> InlineKeyboardM
         ],
     ]
     if in_collection:
+        delete_label = (
+            "Удалить одну копию"
+            if copy_count > 1
+            else "Удалить из коллекции"
+        )
         rows.append(
             [
                 InlineKeyboardButton(
@@ -398,7 +409,7 @@ def make_info_kb(serial: str, *, in_collection: bool = False) -> InlineKeyboardM
                     callback_data=f"info_action:sell:{serial}",
                 ),
                 InlineKeyboardButton(
-                    text="Удалить из коллекции",
+                    text=delete_label,
                     callback_data=f"info_action:delete:{serial}",
                 ),
             ]
