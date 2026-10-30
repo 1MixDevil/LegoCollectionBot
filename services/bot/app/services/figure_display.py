@@ -15,6 +15,11 @@ from httpx import HTTPStatusError
 from app.api.collection import get_figure_info, get_figure_market, list_user_figures
 from app.keyboards.collection import collection_figure_kb
 from app.keyboards.main import make_info_kb
+from app.utils.bricklink_ids import (
+    catalog_item_url,
+    item_image_url,
+    price_guide_url as bricklink_price_guide_page_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,14 +27,11 @@ LOADING_CARD_TEXT = "⏳ Ожидайте, открываю информацию
 
 
 def bricklink_catalog_url(bricklink_id: str) -> str:
-    return (
-        f"https://www.bricklink.com/v2/catalog/catalogitem.page?"
-        f"M={bricklink_id.lower()}"
-    )
+    return catalog_item_url(bricklink_id)
 
 
 def bricklink_price_guide_url(bricklink_id: str) -> str:
-    return f"https://www.bricklink.com/catalogPG.asp?M={bricklink_id.lower()}"
+    return bricklink_price_guide_page_url(bricklink_id)
 
 
 def _format_money(value, currency: str = "") -> str:
@@ -110,9 +112,17 @@ async def get_user_figure_stats(
 def _format_market_lines(market: dict | None, bricklink_id: str = "") -> list[str]:
     bid = (market or {}).get("bricklink_id") or bricklink_id
     if not market or market.get("error"):
+        err = str((market or {}).get("error") or "")
+        hint = ""
+        if any(x in err.lower() for x in ("403", "blocked", "waf", "401", "credentials")):
+            hint = (
+                "\n• Нужны ключи Store API в .env "
+                "(BRICKLINK_CONSUMER_KEY/TOKEN) или свежие BRICKLINK_COOKIES"
+            )
         return [
             "• 📊 BrickLink: цены временно недоступны",
-            f'• <a href="{bricklink_price_guide_url(bid)}">Price Guide на BrickLink</a>',
+            f'• <a href="{bricklink_price_guide_url(bid)}">Price Guide на BrickLink</a>'
+            + hint,
         ]
 
     cur = market.get("currency") or "USD"
@@ -313,7 +323,7 @@ async def send_figure_card(
         in_collection=in_collection,
         copy_count=copy_count,
     )
-    image_url = f"https://img.bricklink.com/ItemImage/MN/0/{bricklink_id}.png"
+    image_url = item_image_url(bricklink_id)
 
     try:
         async with httpx.AsyncClient(

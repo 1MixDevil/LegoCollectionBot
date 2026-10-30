@@ -1,7 +1,7 @@
 """
-Цены BrickLink с catalogPG.asp (Price Guide).
+Цены BrickLink: официальный Store API, иначе HTML catalogPG.asp.
 
-Без cookies обычно открывается; при блокировке — BRICKLINK_COOKIES в .env.
+HTML с датацентров часто 403 / AWS WAF — без cookies или API цены недоступны.
 """
 
 from __future__ import annotations
@@ -15,7 +15,18 @@ from typing import Optional
 import aiohttp
 from lxml import html
 
-from app.business.bricklink_client import build_headers, read_bricklink_text
+from app.business.bricklink_api import (
+    BrickLinkAPIError,
+    BrickLinkItemNotFound,
+    api_credentials_configured,
+    get_price_guide as api_get_price_guide,
+)
+from app.business.bricklink_client import (
+    build_headers,
+    load_bricklink_cookies,
+    read_bricklink_text,
+)
+from app.business.bricklink_ids import catalog_query_letter, infer_item_type
 
 logger = logging.getLogger("BrickLinkPriceGuide")
 
@@ -131,6 +142,87 @@ def _detect_currency(plain: str) -> str:
     return "USD"
 
 
+def _fnum(value) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _inum(value) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_api_block(
+    target: ConditionPrices,
+    data: dict,
+    *,
+    sold: bool,
+) -> None:
+    if sold:
+        target.times_sold_6m = _inum(data.get("unit_quantity"))
+        target.total_qty_sold_6m = _inum(data.get("total_quantity"))
+        target.min_6m = _fnum(data.get("min_price"))
+        target.avg_6m = _fnum(data.get("avg_price"))
+        target.qty_avg_6m = _fnum(data.get("qty_avg_price"))
+        target.max_6m = _fnum(data.get("max_price"))
+    else:
+        target.total_lots = _inum(data.get("unit_quantity"))
+        target.total_qty_for_sale = _inum(data.get("total_quantity"))
+        target.min_listed = _fnum(data.get("min_price"))
+        target.avg_listed = _fnum(data.get("avg_price"))
+        target.max_listed = _fnum(data.get("max_price"))
+
+
+def fetch_price_guide_via_api(bricklink_id: str) -> PriceGuideData:
+    """Собрать new/used × sold/stock через Store API."""
+    bricklink_id = bricklink_id.strip().lower()
+    item_type = infer_item_type(bricklink_id)
+    result = PriceGuideData(bricklink_id=bricklink_id)
+    currency = "USD"
+    got_any = False
+
+    for cond, attr in (("N", "new"), ("U", "used")):
+        target: ConditionPrices = getattr(result, attr)
+        for guide_type, sold in (("sold", True), ("stock", False)):
+            try:
+                block = api_get_price_guide(
+                    bricklink_id,
+                    item_type=item_type,
+                    guide_type=guide_type,
+                    new_or_used=cond,
+                )
+            except BrickLinkItemNotFound:
+                result.error = "not_found"
+                return result
+            except BrickLinkAPIError as exc:
+                logger.warning(
+                    "API price %s %s/%s: %s",
+                    bricklink_id,
+                    cond,
+                    guide_type,
+                    exc,
+                )
+                continue
+            _apply_api_block(target, block, sold=sold)
+            currency = str(block.get("currency_code") or currency)
+            got_any = True
+
+    result.currency = currency
+    if not got_any:
+        result.error = "api_no_price_data"
+    else:
+        result.error = None
+    return result
+
+
 async def fetch_price_guide(
     session: aiohttp.ClientSession,
     bricklink_id: str,
@@ -142,19 +234,31 @@ async def fetch_price_guide(
     if REQUEST_DELAY > 0:
         await asyncio.sleep(REQUEST_DELAY)
 
+    letter = catalog_query_letter(bricklink_id)
+    cookies = load_bricklink_cookies() or None
     try:
         async with session.get(
             PRICE_GUIDE_URL,
-            params={"M": bricklink_id},
+            params={letter: bricklink_id},
             headers=build_headers(),
+            cookies=cookies,
             timeout=aiohttp.ClientTimeout(total=45),
         ) as resp:
-            resp.raise_for_status()
+            status = resp.status
             text = await read_bricklink_text(resp)
+            waf = bool(resp.headers.get("x-amzn-waf-action")) or (
+                "gokuprops" in text.lower() or "challenge.js" in text.lower()
+            )
+            if status in (202, 403, 503) or waf or len(text) < 800:
+                raise RuntimeError(
+                    f"BrickLink Price Guide blocked (HTTP {status}"
+                    f"{', WAF' if waf else ''})"
+                )
+            if status >= 400:
+                resp.raise_for_status()
     except Exception as exc:
-        logger.warning("price guide fetch %s: %s", bricklink_id, exc)
-        data = PriceGuideData(bricklink_id=bricklink_id, error=str(exc))
-        return data
+        logger.warning("price guide HTML %s: %s", bricklink_id, exc)
+        return PriceGuideData(bricklink_id=bricklink_id, error=str(exc))
 
     data = parse_price_guide_html(text, bricklink_id)
     if not data.error:
@@ -163,6 +267,28 @@ async def fetch_price_guide(
 
 
 async def get_market_prices(bricklink_id: str) -> PriceGuideData:
+    bricklink_id = bricklink_id.strip().lower()
+    if bricklink_id in _cache:
+        return _cache[bricklink_id]
+
+    # 1) Официальный API — стабильно с VPS (нужны ключи + IP в токене)
+    if api_credentials_configured():
+        try:
+            data = await asyncio.to_thread(fetch_price_guide_via_api, bricklink_id)
+            if not data.error:
+                _cache[bricklink_id] = data
+                return data
+            if data.error == "not_found":
+                return data
+            logger.warning(
+                "API price guide %s: %s — пробуем HTML",
+                bricklink_id,
+                data.error,
+            )
+        except Exception:
+            logger.exception("API price guide failed for %s", bricklink_id)
+
+    # 2) HTML (часто мёртв без cookies / VPN)
     async with aiohttp.ClientSession() as session:
         return await fetch_price_guide(session, bricklink_id)
 

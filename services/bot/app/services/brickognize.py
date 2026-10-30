@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from app.utils.bricklink_ids import catalog_item_url, normalize_bricklink_id
+
 logger = logging.getLogger(__name__)
 
 API_URL = os.getenv(
@@ -58,6 +60,17 @@ def format_top_candidates(
             bl_id = bricklink.get("external_id") if bricklink else None
             if not bl_id:
                 continue
+            bl_id = normalize_bricklink_id(str(bl_id))
+            raw_url = (bricklink.get("url") or "").strip()
+            # Brickognize иногда отдаёт ?M= для сетов (comcon029-1) — чиним тип сами
+            safe_url = catalog_item_url(bl_id)
+            if raw_url and ("?S=" in raw_url or "?P=" in raw_url or "?M=" in raw_url):
+                # оставляем URL Brickognize только если буква совпадает с нашей эвристикой
+                letter = safe_url.split("?")[-1][:1]
+                if f"?{letter}=" not in raw_url:
+                    raw_url = safe_url
+            else:
+                raw_url = safe_url
 
             candidates.append(
                 {
@@ -65,9 +78,8 @@ def format_top_candidates(
                     "type": candidate.get("type"),
                     "name": candidate.get("name") or bl_id,
                     "score": candidate.get("score") or 0,
-                    "bricklink_id": str(bl_id).lower(),
-                    "bricklink_url": bricklink.get("url")
-                    or f"https://www.bricklink.com/v2/catalog/catalogitem.page?M={bl_id}",
+                    "bricklink_id": bl_id,
+                    "bricklink_url": raw_url,
                 }
             )
 

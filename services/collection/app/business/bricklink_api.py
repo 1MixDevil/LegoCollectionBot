@@ -136,3 +136,52 @@ def get_category_name(category_id: int) -> Optional[str]:
     data = payload.get("data") or {}
     name = unescape(str(data.get("category_name") or "")).strip()
     return name or None
+
+
+def get_price_guide(
+    item_no: str,
+    *,
+    item_type: str = "MINIFIG",
+    guide_type: str = "sold",
+    new_or_used: str = "N",
+    currency_code: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    GET /items/{type}/{no}/price — официальный Price Guide без HTML/WAF.
+    https://www.bricklink.com/v3/api.page?page=get-price-guide
+    """
+    if not api_credentials_configured():
+        raise BrickLinkAPIError("0", "API credentials not configured")
+
+    item_no = item_no.strip()
+    url = f"{API_BASE}/items/{item_type}/{item_no}/price"
+    params: dict[str, Any] = {
+        "guide_type": guide_type,
+        "new_or_used": new_or_used,
+    }
+    if currency_code:
+        params["currency_code"] = currency_code
+
+    response = _oauth_session().get(url, params=params, timeout=30)
+    try:
+        payload: dict[str, Any] = response.json()
+    except ValueError as exc:
+        raise BrickLinkAPIError(
+            str(response.status_code),
+            f"Не JSON: {response.text[:200]}",
+        ) from exc
+
+    meta = payload.get("meta") or {}
+    code = str(meta.get("code", response.status_code))
+    if code == "404":
+        raise BrickLinkItemNotFound(code, meta.get("message", "Item not found"))
+    if code != "200":
+        raise BrickLinkAPIError(
+            code,
+            meta.get("description") or meta.get("message") or "Unknown error",
+        )
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise BrickLinkAPIError(code, "Пустой data в price guide")
+    return data
+

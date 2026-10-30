@@ -28,6 +28,7 @@ from app.crud.figure_crud import (
 from app.models.figures_model import FigureToUser
 
 from app.business.catalog_updater import update_catalog
+from app.business.bricklink_ids import price_guide_url as bricklink_pg_url
 from app.business.bricklink_price_guide import get_market_prices, price_guide_to_dict
 from app.business.exchange_rates import apply_display_currency
 from app.business.parser import FastFigureUpdater
@@ -258,7 +259,7 @@ async def get_figure_market(
         error=raw.get("error"),
         new=to_cond("new"),
         used=to_cond("used"),
-        price_guide_url=f"https://www.bricklink.com/catalogPG.asp?M={bid}",
+        price_guide_url=bricklink_pg_url(bid),
     )
     return await apply_display_currency(market)
 
