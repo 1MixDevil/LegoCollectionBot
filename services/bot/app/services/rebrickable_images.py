@@ -5,7 +5,10 @@
   2. bricker.info PNG — запасной каталог; закрывает BL-only id вроде bob009.
   3. Brickset large JPEG — файл есть, даже когда запись Rebrickable 404
      (bob016: в CSV ссылка есть, самого jpg на CDN нет).
-  4. img.bricklink.com PNG/JPG. С датацентров часто 200 + HTML maintenance —
+  4. BrickEconomy `{id}_large.jpg` — общий шаблон по любому BL id. Закрывает
+     свежие фигурки, которых нет ни у Rebrickable, ни у bricker, ни у Brickset
+     (bob040, bob041). Нет файла — HTML 200, его отбрасываем по сигнатуре.
+  5. img.bricklink.com PNG/JPG. С датацентров часто 200 + HTML maintenance —
      такое отбрасываем по сигнатуре, а не по статус-коду.
 """
 
@@ -122,6 +125,9 @@ async def get_bricklink_image_urls(*, force: bool = False) -> dict[str, str]:
 
 BRICKSET_LARGE = "https://images.brickset.com/minifigs/large/{item_id}.jpg"
 BRICKER_PNG = "https://bricker.info/images/minifigs/{item_id}.png"
+BRICKECONOMY_LARGE = (
+    "https://www.brickeconomy.com/resources/images/minifigs/{item_id}_large.jpg"
+)
 _MIN_IMAGE_BYTES = 200
 
 
@@ -146,6 +152,11 @@ def is_image_payload(content: bytes, content_type: str = "") -> bool:
     return False
 
 
+def response_is_figure_image(status_code: int, content: bytes, content_type: str = "") -> bool:
+    """200 и настоящий файл. 404 с PNG-заглушкой — не фото."""
+    return status_code == 200 and is_image_payload(content, content_type)
+
+
 def candidate_image_urls(
     bricklink_id: str,
     mapped: dict[str, str] | None = None,
@@ -163,6 +174,7 @@ def candidate_image_urls(
     if infer_item_type(bid) == "MINIFIG":
         urls.append(BRICKER_PNG.format(item_id=bid))
         urls.append(BRICKSET_LARGE.format(item_id=bid))
+        urls.append(BRICKECONOMY_LARGE.format(item_id=bid))
     png = item_image_url(bid)
     urls.append(png)
     if png.endswith(".png"):
@@ -199,7 +211,7 @@ async def fetch_first_image(
             logger.debug("image candidate failed %s", url, exc_info=True)
             continue
         ctype = resp.headers.get("content-type") or ""
-        if is_image_payload(resp.content, ctype):
+        if response_is_figure_image(resp.status_code, resp.content, ctype):
             if index:
                 logger.info("photo %s via %s", bid, url)
             return resp.content
