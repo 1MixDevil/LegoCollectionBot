@@ -12,6 +12,8 @@ import httpx
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
+from app.services.rebrickable_images import get_bricklink_image_urls
+
 logger = logging.getLogger(__name__)
 
 COLLAGE_JPEG_QUALITY = int(os.getenv("COLLAGE_JPEG_QUALITY", "82"))
@@ -154,7 +156,56 @@ class StarWarsCollageGenerator:
             draw.line(line, fill=red, width=stroke)
 
     @staticmethod
+    def _placeholder_cell(
+        id_val: str,
+        min_height: int,
+        font_path: str,
+        font_size: int,
+        owned_ids: frozenset[str] | None = None,
+        repeat_count: int | None = None,
+    ) -> Image.Image:
+        """Ячейка без фото — артикул всё равно попадает в тир-лист."""
+        new_h = min_height
+        new_w = min_height
+        pad_top = pad_bottom = COLLAGE_CELL_PAD
+        canvas = Image.new(
+            "RGB",
+            (new_w, new_h + pad_top + pad_bottom),
+            (245, 245, 245),
+        )
+        draw = ImageDraw.Draw(canvas)
+        # рамка и подпись «нет фото» в центре
+        inset = max(12, new_w // 40)
+        draw.rectangle(
+            [inset, pad_top + inset, new_w - inset, pad_top + new_h - inset],
+            outline=(180, 180, 180),
+            width=max(2, new_w // 200),
+        )
+        note = "нет фото"
+        note_font = StarWarsCollageGenerator.load_font(
+            font_path, max(28, font_size // 3)
+        )
+        nb = draw.textbbox((0, 0), note, font=note_font)
+        nx = (new_w - (nb[2] - nb[0])) // 2
+        ny = pad_top + (new_h - (nb[3] - nb[1])) // 2
+        draw.text((nx, ny), note, font=note_font, fill=(140, 140, 140))
+        StarWarsCollageGenerator._draw_cell_label(
+            draw,
+            canvas.width,
+            id_val,
+            repeat_count=repeat_count,
+            font_path=font_path,
+            base_font_size=font_size,
+        )
+        if owned_ids and id_val.lower() in owned_ids:
+            StarWarsCollageGenerator._draw_owned_mark(
+                draw, canvas.width, canvas.height, pad_top
+            )
+        return canvas
+
+    @staticmethod
     def _prepare_image_from_bytes(
+
         content: bytes,
         id_val: str,
         min_height: int,
@@ -215,8 +266,13 @@ class StarWarsCollageGenerator:
         prefix = prefix_url.rstrip("/")
         headers = {"User-Agent": user_agent}
         semaphore = asyncio.Semaphore(max_connections)
+        try:
+            rb_urls = await get_bricklink_image_urls()
+        except Exception:
+            logger.warning("Rebrickable image map unavailable", exc_info=True)
+            rb_urls = {}
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
 
             async def fetch_one(row: dict) -> Image.Image | None:
                 id_val = str(row.get(id_key, "")).strip()
@@ -228,13 +284,35 @@ class StarWarsCollageGenerator:
                     if repeat_raw is not None and int(repeat_raw) > 1
                     else None
                 )
-                url = f"{prefix}/{id_val}.png"
+                id_key_lower = id_val.lower()
+                url = rb_urls.get(id_key_lower) or f"{prefix}/{id_val}.png"
+
+                async def placeholder() -> Image.Image:
+                    return await asyncio.to_thread(
+                        cls._placeholder_cell,
+                        id_val,
+                        min_height,
+                        font_path,
+                        font_size,
+                        owned_ids,
+                        repeat_count,
+                    )
+
                 try:
                     async with semaphore:
                         resp = await client.get(url, headers=headers)
                         resp.raise_for_status()
                         content = resp.content
-                    return await asyncio.to_thread(
+                        ctype = (resp.headers.get("content-type") or "").lower()
+                    if not content or len(content) < 200:
+                        logger.warning("No photo for %s (empty/short)", id_val)
+                        return await placeholder()
+                    if "html" in ctype or content.lstrip()[:9].lower().startswith(
+                        (b"<!doctype", b"<html")
+                    ):
+                        logger.warning("No photo for %s (html %s)", id_val, ctype)
+                        return await placeholder()
+                    prepared = await asyncio.to_thread(
                         cls._prepare_image_from_bytes,
                         content,
                         id_val,
@@ -244,9 +322,14 @@ class StarWarsCollageGenerator:
                         owned_ids,
                         repeat_count,
                     )
+                    if prepared is None:
+                        logger.warning("No photo for %s (decode failed)", id_val)
+                        return await placeholder()
+                    return prepared
                 except Exception:
+                    logger.warning("No photo for %s (fetch %s)", id_val, url)
                     logger.debug("fetch failed %s", url, exc_info=True)
-                    return None
+                    return await placeholder()
 
             tasks = [asyncio.create_task(fetch_one(r)) for r in rows]
             done = await asyncio.gather(*tasks)

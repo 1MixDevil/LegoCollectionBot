@@ -15,11 +15,6 @@ from httpx import HTTPStatusError
 from app.api.collection import get_figure_info, get_figure_market, list_user_figures
 from app.keyboards.collection import collection_figure_kb
 from app.keyboards.main import make_info_kb
-from app.utils.bricklink_ids import (
-    catalog_item_url,
-    item_image_url,
-    price_guide_url as bricklink_price_guide_page_url,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +22,14 @@ LOADING_CARD_TEXT = "⏳ Ожидайте, открываю информацию
 
 
 def bricklink_catalog_url(bricklink_id: str) -> str:
-    return catalog_item_url(bricklink_id)
+    return (
+        f"https://www.bricklink.com/v2/catalog/catalogitem.page?"
+        f"M={bricklink_id.lower()}"
+    )
 
 
 def bricklink_price_guide_url(bricklink_id: str) -> str:
-    return bricklink_price_guide_page_url(bricklink_id)
+    return f"https://www.bricklink.com/catalogPG.asp?M={bricklink_id.lower()}"
 
 
 def _format_money(value, currency: str = "") -> str:
@@ -112,17 +110,9 @@ async def get_user_figure_stats(
 def _format_market_lines(market: dict | None, bricklink_id: str = "") -> list[str]:
     bid = (market or {}).get("bricklink_id") or bricklink_id
     if not market or market.get("error"):
-        err = str((market or {}).get("error") or "")
-        hint = ""
-        if any(x in err.lower() for x in ("403", "blocked", "waf", "401", "credentials")):
-            hint = (
-                "\n• Нужны ключи Store API в .env "
-                "(BRICKLINK_CONSUMER_KEY/TOKEN) или свежие BRICKLINK_COOKIES"
-            )
         return [
             "• 📊 BrickLink: цены временно недоступны",
-            f'• <a href="{bricklink_price_guide_url(bid)}">Price Guide на BrickLink</a>'
-            + hint,
+            f'• <a href="{bricklink_price_guide_url(bid)}">Price Guide на BrickLink</a>',
         ]
 
     cur = market.get("currency") or "USD"
@@ -323,16 +313,23 @@ async def send_figure_card(
         in_collection=in_collection,
         copy_count=copy_count,
     )
-    image_url = item_image_url(bricklink_id)
+    from app.services.rebrickable_images import resolve_image_url
+
+    image_url = await resolve_image_url(bricklink_id)
 
     try:
         async with httpx.AsyncClient(
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=20.0,
+            follow_redirects=True,
         ) as client:
             img_resp = await client.get(image_url)
             img_resp.raise_for_status()
-            photo = BufferedInputFile(img_resp.content, filename=f"{bricklink_id}.png")
+            ctype = (img_resp.headers.get("content-type") or "").lower()
+            if "html" in ctype or len(img_resp.content) < 200:
+                raise ValueError(f"non-image for {bricklink_id}")
+            ext = ".jpg" if "jpeg" in ctype or image_url.lower().endswith((".jpg", ".jpeg")) else ".png"
+            photo = BufferedInputFile(img_resp.content, filename=f"{bricklink_id}{ext}")
         await bot.send_photo(
             chat_id=chat_id,
             photo=photo,

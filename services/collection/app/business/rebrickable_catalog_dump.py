@@ -26,6 +26,7 @@ from typing import Optional
 import httpx
 
 from app.business.bricklink_catalog_list import ARTICLE_KEYWORD_HINTS, infer_pad_len
+from app.business.bl_minifig_supplement import supplement_for_prefix
 
 logger = logging.getLogger("RebrickableCatalogDump")
 
@@ -135,10 +136,20 @@ async def fetch_minifigs_by_prefix(article: str) -> list[tuple[str, str]]:
     article = article.strip().lower()
     await ensure_dumps()
     catalog = load_bricklink_minifigs()
-    records = sorted(
-        (bid, name) for bid, name in catalog.items() if bid.startswith(article)
+    merged: dict[str, str] = {
+        bid: name
+        for bid, name in catalog.items()
+        if bid.startswith(article)
+    }
+    # BL-only варианты, которых нет в Rebrickable set_mappings
+    for bid, name in supplement_for_prefix(article):
+        merged.setdefault(bid.lower(), name)
+    records = sorted(merged.items())
+    logger.info(
+        "[%s] Rebrickable dump: %s шт. (+supplement)",
+        article,
+        len(records),
     )
-    logger.info("[%s] Rebrickable dump: %s шт.", article, len(records))
     return records
 
 
