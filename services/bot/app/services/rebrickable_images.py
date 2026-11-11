@@ -2,11 +2,11 @@
 
 Порядок:
   1. JPEG с cdn.rebrickable.com по маппингу BL id (обычно живой с датацентра).
-  2. Brickset large JPEG — файл есть, даже когда запись Rebrickable 404
+  2. bricker.info PNG — запасной каталог; закрывает BL-only id вроде bob009.
+  3. Brickset large JPEG — файл есть, даже когда запись Rebrickable 404
      (bob016: в CSV ссылка есть, самого jpg на CDN нет).
-  3. img.bricklink.com PNG, затем JPG. Каноническое фото, когда CDN поднят.
-     Сейчас хост отвечает 200 и HTML страницы maintenance — такое отбрасываем
-     по сигнатуре, а не по статус-коду.
+  4. img.bricklink.com PNG/JPG. С датацентров часто 200 + HTML maintenance —
+     такое отбрасываем по сигнатуре, а не по статус-коду.
 """
 
 from __future__ import annotations
@@ -121,6 +121,7 @@ async def get_bricklink_image_urls(*, force: bool = False) -> dict[str, str]:
 
 
 BRICKSET_LARGE = "https://images.brickset.com/minifigs/large/{item_id}.jpg"
+BRICKER_PNG = "https://bricker.info/images/minifigs/{item_id}.png"
 _MIN_IMAGE_BYTES = 200
 
 
@@ -160,6 +161,7 @@ def candidate_image_urls(
     if mapped_url:
         urls.append(mapped_url)
     if infer_item_type(bid) == "MINIFIG":
+        urls.append(BRICKER_PNG.format(item_id=bid))
         urls.append(BRICKSET_LARGE.format(item_id=bid))
     png = item_image_url(bid)
     urls.append(png)
