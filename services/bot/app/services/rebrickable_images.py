@@ -1,7 +1,12 @@
-"""BrickLink id → URL картинки через CSV-дампы Rebrickable.
+"""Картинка минифигурки: несколько источников, пока один не отдаст файл.
 
-img.bricklink.com с датацентров часто отвечает 302 на maintenance HTML
-(AWS WAF / recovery). CDN Rebrickable отдаёт реальные JPEG.
+Порядок:
+  1. JPEG с cdn.rebrickable.com по маппингу BL id (обычно живой с датацентра).
+  2. Brickset large JPEG — файл есть, даже когда запись Rebrickable 404
+     (bob016: в CSV ссылка есть, самого jpg на CDN нет).
+  3. img.bricklink.com PNG, затем JPG. Каноническое фото, когда CDN поднят.
+     Сейчас хост отвечает 200 и HTML страницы maintenance — такое отбрасываем
+     по сигнатуре, а не по статус-коду.
 """
 
 from __future__ import annotations
@@ -115,14 +120,114 @@ async def get_bricklink_image_urls(*, force: bool = False) -> dict[str, str]:
     return _url_cache
 
 
-async def resolve_image_url(
+BRICKSET_LARGE = "https://images.brickset.com/minifigs/large/{item_id}.jpg"
+_MIN_IMAGE_BYTES = 200
+
+
+def is_image_payload(content: bytes, content_type: str = "") -> bool:
+    """Настоящий JPEG/PNG/GIF/WEBP, а не HTML maintenance и не пустышка."""
+    if not content or len(content) < _MIN_IMAGE_BYTES:
+        return False
+    head = content.lstrip()[:20].lower()
+    if head.startswith((b"<!doctype", b"<html", b"<?xml")) or head.startswith(b"<"):
+        return False
+    ctype = (content_type or "").lower()
+    if "html" in ctype or "json" in ctype or "text/" in ctype:
+        return False
+    if content.startswith(b"\xff\xd8\xff"):
+        return True
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        return True
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return True
+    return False
+
+
+def candidate_image_urls(
+    bricklink_id: str,
+    mapped: dict[str, str] | None = None,
+    *,
+    bricklink_prefix: str | None = None,
+) -> list[str]:
+    """Упорядоченный список URL. Первые — те, что живы, пока BrickLink CDN лежит."""
+    from app.utils.bricklink_ids import infer_item_type, item_image_url
+
+    bid = bricklink_id.strip().lower()
+    urls: list[str] = []
+    mapped_url = (mapped or {}).get(bid)
+    if mapped_url:
+        urls.append(mapped_url)
+    if infer_item_type(bid) == "MINIFIG":
+        urls.append(BRICKSET_LARGE.format(item_id=bid))
+    png = item_image_url(bid)
+    urls.append(png)
+    if png.endswith(".png"):
+        urls.append(png[:-4] + ".jpg")
+    if bricklink_prefix:
+        prefix = bricklink_prefix.rstrip("/")
+        urls.append(f"{prefix}/{bid}.png")
+        urls.append(f"{prefix}/{bid}.jpg")
+    seen: set[str] = set()
+    out: list[str] = []
+    for url in urls:
+        if url and url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
+
+
+async def fetch_first_image(
+    client: httpx.AsyncClient,
+    bricklink_id: str,
+    mapped: dict[str, str] | None = None,
+    *,
+    headers: dict[str, str] | None = None,
+    bricklink_prefix: str | None = None,
+) -> bytes | None:
+    hdrs = headers or {"User-Agent": "Mozilla/5.0"}
+    bid = bricklink_id.strip().lower()
+    for index, url in enumerate(
+        candidate_image_urls(bid, mapped, bricklink_prefix=bricklink_prefix)
+    ):
+        try:
+            resp = await client.get(url, headers=hdrs, follow_redirects=True)
+        except Exception:
+            logger.debug("image candidate failed %s", url, exc_info=True)
+            continue
+        ctype = resp.headers.get("content-type") or ""
+        if is_image_payload(resp.content, ctype):
+            if index:
+                logger.info("photo %s via %s", bid, url)
+            return resp.content
+        logger.debug(
+            "image candidate rejected %s status=%s ctype=%s",
+            url,
+            resp.status_code,
+            ctype,
+        )
+    return None
+
+
+async def download_minifig_image(
+    client: httpx.AsyncClient,
     bricklink_id: str,
     *,
-    prefix_url: str = "https://img.bricklink.com/ItemImage/MN/0",
-) -> str:
-    bid = bricklink_id.strip().lower()
-    urls = await get_bricklink_image_urls()
-    if bid in urls:
-        return urls[bid]
-    prefix = prefix_url.rstrip("/")
-    return f"{prefix}/{bid}.png"
+    mapped: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
+    bricklink_prefix: str | None = None,
+) -> bytes | None:
+    if mapped is None:
+        try:
+            mapped = await get_bricklink_image_urls()
+        except Exception:
+            logger.warning("Rebrickable image map unavailable", exc_info=True)
+            mapped = {}
+    return await fetch_first_image(
+        client,
+        bricklink_id,
+        mapped,
+        headers=headers,
+        bricklink_prefix=bricklink_prefix,
+    )

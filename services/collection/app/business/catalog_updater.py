@@ -18,6 +18,7 @@ from app.business.bricklink_catalog_list import (
     discover_series_metadata,
     fetch_minifigs_by_article,
 )
+from app.business.minifig_suffixes import drop_unstickered_shells
 from app.business.rebrickable_client import get_catalog_source
 from app.models.figures_model import CollectType, Figure
 
@@ -70,6 +71,7 @@ def insert_figures(
     ct: CollectType,
     records: List[Tuple[str, str]],
 ) -> int:
+    records = drop_unstickered_shells(records)
     if not records:
         return 0
 
@@ -222,6 +224,7 @@ async def sync_from_bricklink_catalog(db: Session, article: str) -> dict:
             "message": f"Ошибка загрузки каталога: {exc}",
         }
 
+    records = drop_unstickered_shells(records)
     added = insert_figures(db, ct, records)
 
     if not records:
@@ -259,10 +262,9 @@ async def sync_from_bricklink_catalog(db: Session, article: str) -> dict:
 
 async def sync_from_rebrickable(db: Session, article: str) -> dict:
     """
-    Массовое наполнение из ежедневных CSV Rebrickable + set_mappings (BL id).
-
-    Не ходит на bricklink.com → нет AWS WAF. Покрытие ≈ официальный LEGO-каталог
-    (кастомные/редкие BL-only позиции могут отсутствовать).
+    Каталог серии из CSV Rebrickable. Один скачанный дамп, без обхода BrickLink.
+    Редкие id, которых нет в маппинге (bob009s), дописывает supplement.
+    HTML BrickLink — только если дамп не скачался или CATALOG_DATA_SOURCE=bricklink.
     """
     from app.business.rebrickable_catalog_dump import fetch_minifigs_by_prefix
 
@@ -292,6 +294,7 @@ async def sync_from_rebrickable(db: Session, article: str) -> dict:
         fallback["source"] = "bricklink_catalog_fallback"
         return fallback
 
+    records = drop_unstickered_shells(records)
     added = insert_figures(db, ct, records)
 
     if not records:
@@ -325,39 +328,6 @@ async def sync_from_rebrickable(db: Session, article: str) -> dict:
     }
     logger.info("=== REBRICKABLE DUMP DONE | %s ===", result)
     return result
-
-
-def _resolve_collect_type(db: Session, set_num: str) -> CollectType | None:
-    """Подбирает серию по префиксу set_num (sw0001a → sw)."""
-    prefix_match = None
-    for ct in db.query(CollectType).all():
-        if set_num.startswith(ct.article.lower()):
-            if prefix_match is None or len(ct.article) > len(prefix_match.article):
-                prefix_match = ct
-    return prefix_match
-
-
-async def fetch_and_insert_one(db: Session, set_num: str) -> bool:
-    """Подтянуть одну фигурку по BrickLink ID, если её ещё нет в БД."""
-    from aiohttp import ClientSession
-
-    from app.business.parser import FastFigureUpdater
-
-    set_num = set_num.strip().lower()
-    if db.query(Figure).filter_by(bricklink_id=set_num).first():
-        return True
-
-    ct = _resolve_collect_type(db, set_num)
-    if not ct:
-        return False
-
-    async with ClientSession() as session:
-        result = await FastFigureUpdater.fetch_name(session, set_num)
-    if not result.name:
-        return False
-
-    insert_figures(db, ct, [(set_num, result.name)])
-    return True
 
 
 async def update_catalog(

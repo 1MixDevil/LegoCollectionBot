@@ -9,11 +9,11 @@ BrickLink catalogList с VPS режет AWS WAF, поэтому держим я�
 from __future__ import annotations
 
 # Только Minifigure (M=), не Parts (P=). bob004/bob018 — Gary (parts), не сюда.
+# bob009 / bob010 в каталоге BrickLink есть, но это оболочки «without sticker»:
+# их нельзя инвентаризировать, фигурка живёт на bob009s / bob010s.
 SUPPLEMENT_BY_PREFIX: dict[str, list[tuple[str, str]]] = {
     "bob": [
-        ("bob009", "Robot SpongeBob without Sticker"),
         ("bob009s", "Robot SpongeBob with Sticker"),
-        ("bob010", "Robot Customer without Stickers"),
         ("bob010s", "Robot Customer with Stickers"),
         ("bob017b", "Bikini Bottom Emergency Room Doctor - Chest Pocket"),
         ("bob024s", "Plankton with Sticker"),

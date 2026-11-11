@@ -12,7 +12,7 @@ import httpx
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
-from app.services.rebrickable_images import get_bricklink_image_urls
+from app.services.rebrickable_images import fetch_first_image, get_bricklink_image_urls
 
 logger = logging.getLogger(__name__)
 
@@ -284,9 +284,6 @@ class StarWarsCollageGenerator:
                     if repeat_raw is not None and int(repeat_raw) > 1
                     else None
                 )
-                id_key_lower = id_val.lower()
-                url = rb_urls.get(id_key_lower) or f"{prefix}/{id_val}.png"
-
                 async def placeholder() -> Image.Image:
                     return await asyncio.to_thread(
                         cls._placeholder_cell,
@@ -300,17 +297,15 @@ class StarWarsCollageGenerator:
 
                 try:
                     async with semaphore:
-                        resp = await client.get(url, headers=headers)
-                        resp.raise_for_status()
-                        content = resp.content
-                        ctype = (resp.headers.get("content-type") or "").lower()
-                    if not content or len(content) < 200:
-                        logger.warning("No photo for %s (empty/short)", id_val)
-                        return await placeholder()
-                    if "html" in ctype or content.lstrip()[:9].lower().startswith(
-                        (b"<!doctype", b"<html")
-                    ):
-                        logger.warning("No photo for %s (html %s)", id_val, ctype)
+                        content = await fetch_first_image(
+                            client,
+                            id_val,
+                            rb_urls,
+                            headers=headers,
+                            bricklink_prefix=prefix,
+                        )
+                    if not content:
+                        logger.warning("No photo for %s", id_val)
                         return await placeholder()
                     prepared = await asyncio.to_thread(
                         cls._prepare_image_from_bytes,
@@ -327,8 +322,8 @@ class StarWarsCollageGenerator:
                         return await placeholder()
                     return prepared
                 except Exception:
-                    logger.warning("No photo for %s (fetch %s)", id_val, url)
-                    logger.debug("fetch failed %s", url, exc_info=True)
+                    logger.warning("No photo for %s", id_val)
+                    logger.debug("fetch failed %s", id_val, exc_info=True)
                     return await placeholder()
 
             tasks = [asyncio.create_task(fetch_one(r)) for r in rows]

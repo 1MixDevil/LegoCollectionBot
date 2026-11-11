@@ -65,7 +65,7 @@ def format_update_result(article: str, result: dict) -> str:
         f"⚠️ Серия <code>{article}</code>: ничего не найдено.\n"
         f"Проверено базовых номеров: {checked or '?'}.\n"
         f"Причины: {reasons_text}\n\n"
-        f"{message or 'Проверьте префix серии и повторите позже.'}"
+        f"{message or 'Проверьте префикс серии и повторите позже.'}"
     )
 
 
@@ -99,8 +99,8 @@ async def get_article(message: types.Message, state: FSMContext):
     telegram_id = str(message.from_user.id)
     kb = await get_main_keyboard(telegram_id)
     status_msg = await message.answer(
-        f"⏳ Загружаю каталог <code>{article}</code> с BrickLink…\n"
-        "Обычно 10–60 сек.",
+        f"⏳ Загружаю каталог <code>{article}</code>…\n"
+        "Обычно несколько секунд.",
         parse_mode="HTML",
     )
 

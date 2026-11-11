@@ -131,6 +131,16 @@ def parse_catalog_html(text: str, item_id: str) -> PageFetchResult:
         return PageFetchResult(
             False, 200, "not_found", "Такого Item No нет в каталоге", url_used=""
         )
+    # bob009 есть в каталоге, но BrickLink сам пишет, что это не инвентаризируемая
+    # фигурка. Собирают вариант со стикером (bob009s), а не эту оболочку.
+    if "cannot be inventoried" in lowered:
+        return PageFetchResult(
+            False,
+            200,
+            "not_found",
+            "Запись есть, но отдельной фигурки нет (cannot be inventoried)",
+            url_used="",
+        )
     if "general error" in lowered or "oops, sorry" in lowered:
         return PageFetchResult(
             False,

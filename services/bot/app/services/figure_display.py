@@ -313,9 +313,7 @@ async def send_figure_card(
         in_collection=in_collection,
         copy_count=copy_count,
     )
-    from app.services.rebrickable_images import resolve_image_url
-
-    image_url = await resolve_image_url(bricklink_id)
+    from app.services.rebrickable_images import download_minifig_image
 
     try:
         async with httpx.AsyncClient(
@@ -323,13 +321,11 @@ async def send_figure_card(
             timeout=20.0,
             follow_redirects=True,
         ) as client:
-            img_resp = await client.get(image_url)
-            img_resp.raise_for_status()
-            ctype = (img_resp.headers.get("content-type") or "").lower()
-            if "html" in ctype or len(img_resp.content) < 200:
+            content = await download_minifig_image(client, bricklink_id)
+            if not content:
                 raise ValueError(f"non-image for {bricklink_id}")
-            ext = ".jpg" if "jpeg" in ctype or image_url.lower().endswith((".jpg", ".jpeg")) else ".png"
-            photo = BufferedInputFile(img_resp.content, filename=f"{bricklink_id}{ext}")
+            ext = ".jpg" if content.startswith(b"\xff\xd8") else ".png"
+            photo = BufferedInputFile(content, filename=f"{bricklink_id}{ext}")
         await bot.send_photo(
             chat_id=chat_id,
             photo=photo,

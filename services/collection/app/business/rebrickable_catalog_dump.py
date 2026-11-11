@@ -25,8 +25,9 @@ from typing import Optional
 
 import httpx
 
-from app.business.bricklink_catalog_list import ARTICLE_KEYWORD_HINTS, infer_pad_len
 from app.business.bl_minifig_supplement import supplement_for_prefix
+from app.business.bricklink_catalog_list import ARTICLE_KEYWORD_HINTS, infer_pad_len
+from app.business.bricklink_ids import is_series_item
 
 logger = logging.getLogger("RebrickableCatalogDump")
 
@@ -39,6 +40,9 @@ CACHE_TTL_SEC = int(os.getenv("REBRICKABLE_CACHE_TTL_SEC", str(12 * 3600)))
 
 MINIFIGS_FILE = "minifigs.csv.gz"
 MAPPINGS_FILE = "set_mappings.csv.gz"
+
+_catalog_cache: dict[str, str] | None = None
+_catalog_stamp: tuple[int, int] | None = None
 
 
 def _series_display_name(article: str) -> str:
@@ -98,13 +102,19 @@ def load_bricklink_minifigs() -> dict[str, str]:
     """
     bricklink_id → name (официальные LEGO-минифигурки с маппингом BL).
     При дубликатах BL id оставляем первое имя.
+    Повторный разбор того же файла не делается: /update всех серий читает дамп один раз.
     """
+    global _catalog_cache, _catalog_stamp
     minifigs_path = _cache_path(MINIFIGS_FILE)
     mappings_path = _cache_path(MAPPINGS_FILE)
     if not minifigs_path.is_file() or not mappings_path.is_file():
         raise FileNotFoundError(
             "Нет кэша Rebrickable CSV — сначала вызовите ensure_dumps()"
         )
+
+    stamp = (minifigs_path.stat().st_mtime_ns, mappings_path.stat().st_mtime_ns)
+    if _catalog_cache is not None and _catalog_stamp == stamp:
+        return _catalog_cache
 
     names = {
         row["fig_num"]: (row.get("name") or "").strip()
@@ -127,6 +137,8 @@ def load_bricklink_minifigs() -> dict[str, str]:
         name = names.get(fig) or bl_id
         out[bl_id] = name
 
+    _catalog_cache = out
+    _catalog_stamp = stamp
     logger.info("Rebrickable dump: %s минифигурок с BrickLink id", len(out))
     return out
 
@@ -139,7 +151,7 @@ async def fetch_minifigs_by_prefix(article: str) -> list[tuple[str, str]]:
     merged: dict[str, str] = {
         bid: name
         for bid, name in catalog.items()
-        if bid.startswith(article)
+        if is_series_item(bid, article)
     }
     # BL-only варианты, которых нет в Rebrickable set_mappings
     for bid, name in supplement_for_prefix(article):

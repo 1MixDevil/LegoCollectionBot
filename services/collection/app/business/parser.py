@@ -27,6 +27,7 @@ from app.business.bricklink_client import (
     parse_catalog_html,
     read_bricklink_text,
 )
+from app.business.minifig_suffixes import SuffixProbe, drop_unstickered_shells
 from app.models.figures_model import CollectType, Figure
 
 logger = logging.getLogger("FastFigureUpdater")
@@ -270,23 +271,21 @@ class FastFigureUpdater:
                         fetch.hint,
                     )
                     miss_num += 1
-                    if miss_num >= max_miss:
-                        logger.info(
-                            "[%s] Остановка: %s подряд пустых базовых ID (max_miss=%s), "
-                            "последний проверенный: %s",
-                            article,
-                            max_miss,
-                            max_miss,
-                            base_id,
-                        )
-                        break
 
-                miss_suffix = 0
-                suffix_char = "a"
-                while miss_suffix < max_suffix:
-                    suffixed_id = f"{article}{num:0{pad_length}d}{suffix_char}"
+                # Буквы проверяем и когда базового номера нет: bob009 пустой,
+                # а фигурка только bob009s. Номер считается промахом, только
+                # если пусты и база, и все буквы — иначе серия оборвётся на дырке.
+                found_any = bool(fetch.name)
+                probe = SuffixProbe(max_suffix)
+                while True:
+                    letter = probe.next_letter()
+                    if letter is None:
+                        break
+                    suffixed_id = f"{article}{num:0{pad_length}d}{letter}"
                     fetch_s = await FastFigureUpdater.fetch_name(session, suffixed_id)
-                    if fetch_s.name:
+                    ok = bool(fetch_s.name)
+                    probe.observe(letter, ok)
+                    if ok:
                         logger.info(
                             "FOUND %-10s → %s (via %s)",
                             suffixed_id,
@@ -295,16 +294,27 @@ class FastFigureUpdater:
                         )
                         results.append((suffixed_id, fetch_s.name))
                         stats["found"] += 1
-                        miss_suffix = 0
+                        found_any = True
                     else:
                         logger.debug(
                             "MISS  %-10s | reason=%s",
                             suffixed_id,
                             fetch_s.reason,
                         )
-                        miss_suffix += 1
-                    suffix_char = chr(ord(suffix_char) + 1)
                     await asyncio.sleep(0.1)
+
+                if found_any:
+                    miss_num = 0
+                elif miss_num >= max_miss:
+                    logger.info(
+                        "[%s] Остановка: %s подряд пустых номеров (max_miss=%s), "
+                        "последний проверенный: %s",
+                        article,
+                        max_miss,
+                        max_miss,
+                        base_id,
+                    )
+                    break
 
                 num += 1
 
@@ -333,6 +343,7 @@ class FastFigureUpdater:
 
     @staticmethod
     def insert_new_figures(db: Session, ct: CollectType, records: List[Tuple[str, str]]) -> int:
+        records = drop_unstickered_shells(records)
         if not records:
             logger.info("[%s] Нечего вставлять в БД.", ct.article)
             return 0

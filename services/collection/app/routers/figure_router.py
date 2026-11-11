@@ -1,8 +1,7 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import NoResultFound
-import asyncio
 
 from app.core.db import get_db
 from app.schemas.figure_schema import (
@@ -11,8 +10,8 @@ from app.schemas.figure_schema import (
     FigureToUserCreate, FigureToUserRead, FigureToUserUpdate, FigureToUserReadFull, FigureInfo,
     FigureBrief,
 )
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-
+from app.business.catalog_updater import update_catalog
+from app.business.bricklink_ids import price_guide_url as bricklink_pg_url
 from app.crud.figure_crud import (
     # CollectType
     create_collect_type, get_collect_type, list_collect_types, update_collect_type, delete_collect_type,
@@ -27,11 +26,8 @@ from app.crud.figure_crud import (
 
 from app.models.figures_model import FigureToUser
 
-from app.business.catalog_updater import update_catalog
-from app.business.bricklink_ids import price_guide_url as bricklink_pg_url
 from app.business.bricklink_price_guide import get_market_prices, price_guide_to_dict
 from app.business.exchange_rates import apply_display_currency
-from app.business.parser import FastFigureUpdater
 from app.schemas.figure_schema import FigureMarketPrices, MarketConditionPrices
 
 router = APIRouter(prefix="/figure", tags=["figure"])
@@ -191,11 +187,11 @@ async def update_all_figures(
     db: Session = Depends(get_db)
 ):
     """
-    Запустить обновление данных для всех доступных артикулей параллельно.
-    Возвращает словарь с количеством добавленных фигур по каждому артикулу и общую сумму.
+    Обновить каталог всех серий тем же путём, что и /update (дамп Rebrickable).
+    Серии идут по очереди: одна сессия БД и один разбор CSV.
     """
     # Получаем все типы коллекций (каждый содержит поле article)
-    from app.models.figures_model import CollectType, Figure
+    from app.models.figures_model import CollectType
 
     collect_types = db.query(CollectType).all()
     if not collect_types:
@@ -204,25 +200,18 @@ async def update_all_figures(
             detail="Не найден ни один тип для обновления"
         )
 
-    # Формируем задачи для параллельного обновления
-    tasks = []
-    for ct in collect_types:
-        tasks.append(
-            FastFigureUpdater.update(db, ct.article, max_miss)
-        )
-
-    # Выполняем все задачи параллельно
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
+    # Формируем обновление по одной серии: общая SQLAlchemy-сессия
+    # не переживает параллельные запросы, а дамп Rebrickable читается один раз.
     summary = {}
     total_added = 0
-
-    for ct, res in zip(collect_types, results):
-        if isinstance(res, Exception):
-            summary[ct.article] = f"error: {res}"
-        else:
-            summary[ct.article] = res
-            total_added += res.get("added", 0)
+    for ct in collect_types:
+        try:
+            res = await update_catalog(db, ct.article, max_miss)
+        except Exception as exc:
+            summary[ct.article] = f"error: {exc}"
+            continue
+        summary[ct.article] = res
+        total_added += res.get("added", 0) or 0
 
     return {"added_per_article": summary, "total_added": total_added}
 

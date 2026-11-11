@@ -35,6 +35,20 @@ def normalize_bricklink_id(item_id: str) -> str:
     return (item_id or "").strip().lower()
 
 
+def is_series_item(item_id: str, article: str) -> bool:
+    """
+    sw0001a принадлежит sw, col012 — col.
+    colhp01 не принадлежит col: после префикса должна идти цифра,
+    иначе короткая серия забирает colhp / colmar / collt.
+    """
+    item_id = normalize_bricklink_id(item_id)
+    article = normalize_bricklink_id(article)
+    if not article or not item_id.startswith(article):
+        return False
+    rest = item_id[len(article):]
+    return bool(rest) and rest[0].isdigit()
+
+
 def infer_item_type(item_id: str) -> str:
     """
     BrickLink Store API type: MINIFIG | SET | PART.

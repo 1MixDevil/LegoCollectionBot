@@ -48,9 +48,9 @@ def _search_words(title: str) -> str:
 
 
 async def _fetch_minifig_image(client: httpx.AsyncClient, catalog_id: str) -> bytes | None:
-    from app.utils.bricklink_ids import item_image_url
+    from app.services.rebrickable_images import download_minifig_image
 
-    return await _fetch_bytes(client, item_image_url(catalog_id))
+    return await download_minifig_image(client, catalog_id, headers=HEADERS)
 
 
 async def _fetch_set_image(client: httpx.AsyncClient, set_num: str) -> bytes | None:

@@ -22,6 +22,7 @@ from app.business.bricklink_client import (
     load_bricklink_cookies,
     read_bricklink_text,
 )
+from app.business.bricklink_ids import is_series_item
 
 logger = logging.getLogger("BrickLinkCatalogList")
 
@@ -129,7 +130,7 @@ def parse_catalog_list_page(html_text: str, article: str) -> list[tuple[str, str
     def _add(item_id: str, name: str) -> None:
         item_id = item_id.lower().strip()
         name = _normalize_name(name)
-        if not item_id.startswith(article) or item_id in seen:
+        if not is_series_item(item_id, article) or item_id in seen:
             return
         if not name or name.lower() == item_id:
             name = item_id
