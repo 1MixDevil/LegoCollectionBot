@@ -135,6 +135,8 @@ class FigureMarketPrices(BaseModel):
     new: MarketConditionPrices = MarketConditionPrices()
     used: MarketConditionPrices = MarketConditionPrices()
     price_guide_url: Optional[str] = None
+    color_id: Optional[str] = None
+    color_name: Optional[str] = None
 
 
 class FigureBrief(BaseModel):

@@ -249,6 +249,8 @@ async def get_figure_market(
         new=to_cond("new"),
         used=to_cond("used"),
         price_guide_url=bricklink_pg_url(bid),
+        color_id=raw.get("color_id"),
+        color_name=raw.get("color_name"),
     )
     return await apply_display_currency(market)
 

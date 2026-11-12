@@ -117,6 +117,9 @@ def _format_market_lines(market: dict | None, bricklink_id: str = "") -> list[st
     src_cur = market.get("source_currency")
     rate = market.get("exchange_rate")
     lines = ["", "📊 <b>BrickLink</b> (средние за 6 мес.)"]
+    color_name = (market.get("color_name") or "").strip()
+    if color_name:
+        lines.append(f"• Цвет: {color_name}")
     if src_cur and rate and cur == "RUB":
         rate_date = market.get("exchange_rate_date") or ""
         date_str = _format_rate_date(rate_date) if rate_date else ""

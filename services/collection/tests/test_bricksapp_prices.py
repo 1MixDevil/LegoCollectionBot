@@ -1,4 +1,6 @@
 from app.business.bricksapp_prices import (
+    bricksapp_catalog_url,
+    choose_part_color,
     extract_prices_bl,
     parse_bricksapp_price_guide,
 )
@@ -26,6 +28,19 @@ def test_maps_sales_and_skips_zero_blocks():
     assert parsed.new.avg_6m == 8.4518
     assert parsed.new.times_sold_6m == 14
     assert parsed.new.total_lots is None
+
+
+def test_part_price_uses_the_color_with_stock():
+    page = r"""
+    {\"id\":158,\"name\":\"Mx Clear\",\"nameRus\":\"Modulex Бесцветный-прозрачный\"}
+    {\"id\":16,\"name\":\"White\",\"nameRus\":\"Белый\"}
+    {\"id\":53,\"name\":\"Light Bluish Gray\",\"nameRus\":\"Светло-серый\"}
+    \"color\":{\"id\":53,\"name\":\"Light Bluish Gray\"},\"quantity\":4
+    \"color\":{\"id\":16,\"name\":\"White\"},\"quantity\":1
+    """
+    assert choose_part_color(page) == ("53", "Светло-серый")
+    assert bricksapp_catalog_url("88646", "PART", "53").endswith("/catalog/parts/88646/53")
+    assert bricksapp_catalog_url("75192-1", "SET").endswith("/catalog/sets/75192-1")
 
 
 def test_page_without_guide_is_not_found():

@@ -304,4 +304,6 @@ def price_guide_to_dict(data: PriceGuideData) -> dict:
         "error": data.error,
         "new": cond_dict(data.new),
         "used": cond_dict(data.used),
+        "color_id": data.color_id,
+        "color_name": data.color_name,
     }

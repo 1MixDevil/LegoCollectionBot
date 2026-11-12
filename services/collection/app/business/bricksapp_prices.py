@@ -1,8 +1,11 @@
 """Price Guide BrickLink со страницы BricksAPP.
 
 Пока bricklink.com и api.bricklink.com отдают maintenance, каталог
-https://bricksapp.ru/catalog/minifigures/{id} всё ещё содержит блок pricesBL:
-продажи за 6 месяцев и текущие лоты, в долларах.
+всё ещё содержит блок pricesBL: продажи за 6 месяцев и текущие лоты, в долларах.
+
+Минифигурка: /catalog/minifigures/{id}
+Набор: /catalog/sets/{id}
+Деталь: цена зависит от цвета, она на /catalog/parts/{id}/{color}
 """
 
 from __future__ import annotations
@@ -11,17 +14,81 @@ import json
 import logging
 import re
 
+from app.business.bricklink_ids import infer_item_type
 from app.business.price_guide_models import ConditionPrices, PriceGuideData
 
 logger = logging.getLogger("BricksAppPrices")
 
-BRICKSAPP_MINIFIG_URL = "https://bricksapp.ru/catalog/minifigures/{item_id}"
+_SECTION = {
+    "MINIFIG": "minifigures",
+    "SET": "sets",
+    "PART": "parts",
+}
+_COLOR_RE = re.compile(
+    r'\{"id":(\d+),"name":"([^"]+)","nameRus":"([^"]+)"\}'
+)
+_OFFER_QTY_RE = re.compile(
+    r'"color":\{"id":(\d+)[\s\S]{0,700}?"quantity":(\d+)'
+)
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
 
 _cookie: str | None = None
+
+
+def bricksapp_catalog_url(
+    item_id: str,
+    item_type: str,
+    color_id: str | None = None,
+) -> str:
+    section = _SECTION.get(item_type, "minifigures")
+    url = f"https://bricksapp.ru/catalog/{section}/{item_id}"
+    if color_id:
+        url = f"{url}/{color_id}"
+    return url
+
+
+def _loose(html: str) -> str:
+    return html.replace('\\"', '"')
+
+
+def _is_modulex(name: str) -> bool:
+    low = name.lower()
+    return low.startswith("mx ") or "modulex" in low
+
+
+def part_colors(html: str) -> list[tuple[str, str]]:
+    """Уникальные цвета детали: (id, русское имя)."""
+    seen: set[str] = set()
+    colors: list[tuple[str, str]] = []
+    for match in _COLOR_RE.finditer(_loose(html)):
+        color_id, name, name_rus = match.groups()
+        if color_id in seen:
+            continue
+        seen.add(color_id)
+        colors.append((color_id, name_rus or name))
+    return colors
+
+
+def choose_part_color(html: str) -> tuple[str | None, str | None]:
+    """Цвет с наибольшим остатком на BricksAPP, иначе первый обычный."""
+    colors = part_colors(html)
+    if not colors:
+        return None, None
+    stock: dict[str, int] = {}
+    for match in _OFFER_QTY_RE.finditer(_loose(html)):
+        color_id, qty = match.group(1), int(match.group(2))
+        stock[color_id] = stock.get(color_id, 0) + qty
+    ranked = sorted(colors, key=lambda item: stock.get(item[0], 0), reverse=True)
+    for color_id, name in ranked:
+        if stock.get(color_id, 0) > 0 and not _is_modulex(name):
+            return color_id, name
+    for color_id, name in colors:
+        if not _is_modulex(name):
+            return color_id, name
+    return colors[0]
 
 
 def extract_prices_bl(html: str) -> dict | None:
@@ -121,31 +188,58 @@ async def _get_page(session, url: str) -> str:
     import aiohttp
 
     global _cookie
-    headers = {"User-Agent": _UA, "Accept": "text/html"}
-    if _cookie:
-        headers["Cookie"] = _cookie
     timeout = aiohttp.ClientTimeout(total=25)
-    async with session.get(url, headers=headers, timeout=timeout) as resp:
-        text = await resp.text(errors="replace")
-    if "pricesBL" in text:
+    last_error: Exception | None = None
+    for _attempt in range(2):
+        headers = {"User-Agent": _UA, "Accept": "text/html", "Accept-Language": "ru"}
+        if _cookie:
+            headers["Cookie"] = _cookie
+        try:
+            async with session.get(url, headers=headers, timeout=timeout) as resp:
+                text = await resp.text(errors="replace")
+        except aiohttp.ClientError as exc:
+            last_error = exc
+            _cookie = None
+            continue
+        if "pricesBL" in text or "initialPriceGuide" in text or "colorProducts" in text:
+            return text
+        match = re.search(r"_v2=([^;'\"\s]+)", text)
+        if not match:
+            last_error = RuntimeError("BricksAPP не отдал страницу каталога")
+            _cookie = None
+            continue
+        _cookie = "_v2=" + match.group(1)
+        headers["Cookie"] = _cookie
+        async with session.get(url, headers=headers, timeout=timeout) as resp:
+            text = await resp.text(errors="replace")
+        if "Проверка браузера" in text and "pricesBL" not in text:
+            _cookie = None
+            last_error = RuntimeError("BricksAPP не пропустил проверку")
+            continue
         return text
-    match = re.search(r"_v2=([^;'\"\s]+)", text)
-    if not match:
-        raise RuntimeError("BricksAPP не отдал страницу каталога")
-    _cookie = "_v2=" + match.group(1)
-    headers["Cookie"] = _cookie
-    async with session.get(url, headers=headers, timeout=timeout) as resp:
-        text = await resp.text(errors="replace")
-    if "pricesBL" not in text:
-        _cookie = None
-    return text
+    raise last_error or RuntimeError("BricksAPP не отдал страницу каталога")
 
 
 async def fetch_price_guide_bricksapp(bricklink_id: str) -> PriceGuideData:
     import aiohttp
 
     bricklink_id = bricklink_id.strip().lower()
-    url = BRICKSAPP_MINIFIG_URL.format(item_id=bricklink_id)
+    item_type = infer_item_type(bricklink_id)
+    color_id: str | None = None
+    color_name: str | None = None
     async with aiohttp.ClientSession() as session:
-        html = await _get_page(session, url)
-    return parse_bricksapp_price_guide(html, bricklink_id)
+        html = await _get_page(
+            session, bricksapp_catalog_url(bricklink_id, item_type)
+        )
+        if item_type == "PART" and "pricesBL" not in html:
+            color_id, color_name = choose_part_color(html)
+            if color_id:
+                html = await _get_page(
+                    session,
+                    bricksapp_catalog_url(bricklink_id, item_type, color_id),
+                )
+    data = parse_bricksapp_price_guide(html, bricklink_id)
+    if color_id and not data.error:
+        data.color_id = color_id
+        data.color_name = color_name
+    return data

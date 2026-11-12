@@ -30,3 +30,6 @@ class PriceGuideData:
     new: ConditionPrices = field(default_factory=ConditionPrices)
     used: ConditionPrices = field(default_factory=ConditionPrices)
     error: Optional[str] = None
+    # У детали Price Guide разный для каждого цвета.
+    color_id: Optional[str] = None
+    color_name: Optional[str] = None
