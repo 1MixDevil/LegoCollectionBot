@@ -42,3 +42,21 @@ def test_candidates_use_id_templates_for_every_minifig():
         )
         assert any(u.endswith(f"/{bid}.png") and "bricklink.com" in u for u in urls)
         assert any(u.endswith(f"/{bid}.jpg") and "bricklink.com" in u for u in urls)
+
+
+def test_part_and_set_links_and_photos_are_not_minifig_urls():
+    from app.utils.bricklink_ids import catalog_item_url, price_guide_url
+
+    assert catalog_item_url("88646").endswith("?P=88646")
+    assert price_guide_url("88646").endswith("?P=88646")
+    assert catalog_item_url("75192-1").endswith("?S=75192-1")
+    assert catalog_item_url("bob016").endswith("?M=bob016")
+
+    part = candidate_image_urls("88646")
+    assert part[0] == "https://cdn.rebrickable.com/media/parts/ldraw/0/88646.png"
+    assert any("/PN/0/88646.png" in u for u in part)
+
+    set_urls = candidate_image_urls("75192-1")
+    assert set_urls[0] == "https://cdn.rebrickable.com/media/sets/75192-1.jpg"
+    assert "https://images.brickset.com/sets/images/75192-1.jpg" in set_urls
+    assert any("/SN/0/75192-1.png" in u for u in set_urls)

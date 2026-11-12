@@ -10,6 +10,10 @@
      (bob040, bob041). Нет файла — HTML 200, его отбрасываем по сигнатуре.
   5. img.bricklink.com PNG/JPG. С датацентров часто 200 + HTML maintenance —
      такое отбрасываем по сигнатуре, а не по статус-коду.
+
+Наборы: JPEG Rebrickable sets/{id}.jpg, затем Brickset и BrickEconomy.
+Детали: рендер Rebrickable parts/ldraw/0/{id}.png. Буква каталога P/S/M
+берётся из номера, не зашивается как M.
 """
 
 from __future__ import annotations
@@ -128,6 +132,12 @@ BRICKER_PNG = "https://bricker.info/images/minifigs/{item_id}.png"
 BRICKECONOMY_LARGE = (
     "https://www.brickeconomy.com/resources/images/minifigs/{item_id}_large.jpg"
 )
+REBRICKABLE_SET = "https://cdn.rebrickable.com/media/sets/{item_id}.jpg"
+BRICKSET_SET = "https://images.brickset.com/sets/images/{item_id}.jpg"
+BRICKECONOMY_SET = (
+    "https://www.brickeconomy.com/resources/images/sets/{item_id}_large.jpg"
+)
+REBRICKABLE_PART = "https://cdn.rebrickable.com/media/parts/ldraw/0/{item_id}.png"
 _MIN_IMAGE_BYTES = 200
 
 
@@ -171,10 +181,17 @@ def candidate_image_urls(
     mapped_url = (mapped or {}).get(bid)
     if mapped_url:
         urls.append(mapped_url)
-    if infer_item_type(bid) == "MINIFIG":
+    item_type = infer_item_type(bid)
+    if item_type == "MINIFIG":
         urls.append(BRICKER_PNG.format(item_id=bid))
         urls.append(BRICKSET_LARGE.format(item_id=bid))
         urls.append(BRICKECONOMY_LARGE.format(item_id=bid))
+    elif item_type == "SET":
+        urls.append(REBRICKABLE_SET.format(item_id=bid))
+        urls.append(BRICKSET_SET.format(item_id=bid))
+        urls.append(BRICKECONOMY_SET.format(item_id=bid))
+    elif item_type == "PART":
+        urls.append(REBRICKABLE_PART.format(item_id=bid))
     png = item_image_url(bid)
     urls.append(png)
     if png.endswith(".png"):

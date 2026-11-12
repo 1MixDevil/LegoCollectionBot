@@ -15,6 +15,7 @@ from httpx import HTTPStatusError
 from app.api.collection import get_figure_info, get_figure_market, list_user_figures
 from app.keyboards.collection import collection_figure_kb
 from app.keyboards.main import make_info_kb
+from app.utils.bricklink_ids import catalog_item_url, price_guide_url
 
 logger = logging.getLogger(__name__)
 
@@ -22,14 +23,11 @@ LOADING_CARD_TEXT = "⏳ Ожидайте, открываю информацию
 
 
 def bricklink_catalog_url(bricklink_id: str) -> str:
-    return (
-        f"https://www.bricklink.com/v2/catalog/catalogitem.page?"
-        f"M={bricklink_id.lower()}"
-    )
+    return catalog_item_url(bricklink_id)
 
 
 def bricklink_price_guide_url(bricklink_id: str) -> str:
-    return f"https://www.bricklink.com/catalogPG.asp?M={bricklink_id.lower()}"
+    return price_guide_url(bricklink_id)
 
 
 def _format_money(value, currency: str = "") -> str:

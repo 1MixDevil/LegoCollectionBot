@@ -54,9 +54,9 @@ async def _fetch_minifig_image(client: httpx.AsyncClient, catalog_id: str) -> by
 
 
 async def _fetch_set_image(client: httpx.AsyncClient, set_num: str) -> bytes | None:
-    base = set_num.split("-")[0]
-    url = f"https://img.bricklink.com/ItemImage/SN/0/{base}-1.png"
-    return await _fetch_bytes(client, url)
+    from app.services.rebrickable_images import download_minifig_image
+
+    return await download_minifig_image(client, set_num, headers=HEADERS)
 
 
 async def _catalog_bricklink_id(title: str) -> str | None:
