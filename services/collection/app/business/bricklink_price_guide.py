@@ -1,7 +1,8 @@
 """
-Цены BrickLink: официальный Store API, иначе HTML catalogPG.asp.
+Цены BrickLink: официальный Store API, иначе страница BricksAPP, иначе HTML.
 
-HTML с датацентров часто 403 / AWS WAF — без cookies или API цены недоступны.
+Пока bricklink.com в maintenance, и сайт, и api.bricklink.com недоступны.
+BricksAPP на странице минифигурки отдаёт тот же Price Guide (pricesBL).
 """
 
 from __future__ import annotations
@@ -9,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from dataclasses import dataclass, field
 from typing import Optional
 
 import aiohttp
@@ -27,39 +27,14 @@ from app.business.bricklink_client import (
     read_bricklink_text,
 )
 from app.business.bricklink_ids import catalog_query_letter, infer_item_type
+from app.business.price_guide_models import ConditionPrices, PriceGuideData
 
 logger = logging.getLogger("BrickLinkPriceGuide")
 
 PRICE_GUIDE_URL = "https://www.bricklink.com/catalogPG.asp"
 REQUEST_DELAY = float(__import__("os").getenv("BRICKLINK_PRICE_DELAY", "1.0"))
 
-_cache: dict[str, "PriceGuideData"] = {}
-
-
-@dataclass
-class ConditionPrices:
-    # Last 6 months sales
-    avg_6m: Optional[float] = None
-    min_6m: Optional[float] = None
-    max_6m: Optional[float] = None
-    qty_avg_6m: Optional[float] = None
-    times_sold_6m: Optional[int] = None
-    total_qty_sold_6m: Optional[int] = None
-    # Current items for sale (lots on BrickLink)
-    total_lots: Optional[int] = None
-    total_qty_for_sale: Optional[int] = None
-    avg_listed: Optional[float] = None
-    min_listed: Optional[float] = None
-    max_listed: Optional[float] = None
-
-
-@dataclass
-class PriceGuideData:
-    bricklink_id: str
-    currency: str = "USD"
-    new: ConditionPrices = field(default_factory=ConditionPrices)
-    used: ConditionPrices = field(default_factory=ConditionPrices)
-    error: Optional[str] = None
+_cache: dict[str, PriceGuideData] = {}
 
 
 def _parse_money(text: str) -> Optional[float]:
@@ -281,14 +256,28 @@ async def get_market_prices(bricklink_id: str) -> PriceGuideData:
             if data.error == "not_found":
                 return data
             logger.warning(
-                "API price guide %s: %s — пробуем HTML",
+                "API price guide %s: %s — пробуем BricksAPP",
                 bricklink_id,
                 data.error,
             )
         except Exception:
             logger.exception("API price guide failed for %s", bricklink_id)
 
-    # 2) HTML (часто мёртв без cookies / VPN)
+    # 2) BricksAPP зеркалит Price Guide, пока BrickLink лежит
+    try:
+        from app.business.bricksapp_prices import fetch_price_guide_bricksapp
+
+        data = await fetch_price_guide_bricksapp(bricklink_id)
+        if not data.error:
+            _cache[bricklink_id] = data
+            return data
+        if data.error in ("not_found", "no_price_data"):
+            return data
+        logger.warning("BricksAPP price %s: %s", bricklink_id, data.error)
+    except Exception:
+        logger.exception("BricksAPP price guide failed for %s", bricklink_id)
+
+    # 3) HTML catalogPG (часто мёртв без cookies / VPN)
     async with aiohttp.ClientSession() as session:
         return await fetch_price_guide(session, bricklink_id)
 
