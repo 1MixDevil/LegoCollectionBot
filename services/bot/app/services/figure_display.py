@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Any, Optional
 
 import httpx
@@ -48,32 +47,15 @@ def _format_money(value, currency: str = "") -> str:
         return str(value)
 
 
-def _format_price_dual(
-    amount,
-    currency: str,
-    source_currency: str | None,
-    exchange_rate: float | None,
-) -> str:
-    main = _format_money(amount, currency)
-    if (
-        not source_currency
-        or not exchange_rate
-        or amount is None
-        or currency == source_currency
-    ):
-        return main
-    try:
-        original = float(amount) / float(exchange_rate)
-    except (TypeError, ValueError, ZeroDivisionError):
-        return main
-    return f"{main} ({_format_money(original, source_currency)})"
-
-
-def _format_rate_date(iso_date: str) -> str:
-    try:
-        return datetime.strptime(iso_date[:10], "%Y-%m-%d").strftime("%d.%m.%Y")
-    except ValueError:
-        return iso_date[:10]
+def _condition_price(cond: dict, currency: str) -> str | None:
+    amount = cond.get("avg_price_6m")
+    if amount is None:
+        return None
+    text = _format_money(amount, currency)
+    sold = cond.get("times_sold_6m")
+    if sold:
+        text += f" ({sold})"
+    return text
 
 
 async def get_user_figure_stats(
@@ -114,49 +96,37 @@ def _format_market_lines(market: dict | None, bricklink_id: str = "") -> list[st
         ]
 
     cur = market.get("currency") or "USD"
-    src_cur = market.get("source_currency")
-    rate = market.get("exchange_rate")
-    lines = ["", "📊 <b>BrickLink</b> (средние за 6 мес.)"]
-    color_name = (market.get("color_name") or "").strip()
-    if color_name:
-        lines.append(f"• Цвет: {color_name}")
-    if src_cur and rate and cur == "RUB":
-        rate_date = market.get("exchange_rate_date") or ""
-        date_str = _format_rate_date(rate_date) if rate_date else ""
-        date_part = f" на {date_str}" if date_str else ""
-        lines.append(f"• Курс ЦБ{date_part}: 1 {src_cur} = {rate:.2f} ₽")
+    lines = ["", "📊 <b>BrickLink</b>"]
     pg_url = market.get("price_guide_url") or bricklink_price_guide_url(
         market.get("bricklink_id", "")
     )
+    colors = market.get("colors") or []
+    if colors:
+        for color in colors:
+            new_price = _condition_price(color.get("new") or {}, cur)
+            used_price = _condition_price(color.get("used") or {}, cur)
+            bits = []
+            if new_price:
+                bits.append(f"нов. {new_price}")
+            if used_price:
+                bits.append(f"б/у {used_price}")
+            if not bits:
+                continue
+            name = (color.get("color_name") or "").strip() or "без цвета"
+            lines.append(f"• {name}: " + " · ".join(bits))
+        lines.append(f'• <a href="{pg_url}">Price Guide</a>')
+        return lines
 
-    for label, sale_label, key in (
-        ("🆕 Новая", "нов.", "new"),
-        ("♻️ Б/У", "б/у", "used"),
-    ):
-        c = market.get(key) or {}
-        avg6 = c.get("avg_price_6m")
-        sold = c.get("times_sold_6m")
-        if avg6 is not None:
-            price_str = _format_price_dual(avg6, cur, src_cur, rate)
-            part = f"{label}: <b>{price_str}</b>"
-            if sold is not None:
-                part += f" · продаж {sold}"
-            lines.append(f"• {part}")
-        lots = c.get("total_lots")
-        qty = c.get("total_qty_for_sale")
-        avg_l = c.get("avg_price_listed")
-        if lots is not None and qty is not None:
-            extra = (
-                f" · ср. {_format_price_dual(avg_l, cur, src_cur, rate)}"
-                if avg_l
-                else ""
-            )
-            lines.append(
-                f"• 🛒 В продаже ({sale_label}): <b>{lots}</b> лотов / "
-                f"<b>{qty}</b> шт.{extra}"
-            )
+    for label, key in (("🆕", "new"), ("♻️", "used")):
+        cond = market.get(key) or {}
+        price = _condition_price(cond, cur)
+        if not price:
+            continue
+        lots = cond.get("total_lots")
+        extra = f" · {lots} лот." if lots else ""
+        lines.append(f"• {label} <b>{price}</b>{extra}")
 
-    lines.append(f'• <a href="{pg_url}">Подробный Price Guide</a>')
+    lines.append(f'• <a href="{pg_url}">Price Guide</a>')
     return lines
 
 

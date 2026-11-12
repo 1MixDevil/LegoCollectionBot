@@ -24,6 +24,14 @@ class ConditionPrices:
 
 
 @dataclass
+class ColorPrices:
+    color_id: str
+    color_name: str
+    new: ConditionPrices = field(default_factory=ConditionPrices)
+    used: ConditionPrices = field(default_factory=ConditionPrices)
+
+
+@dataclass
 class PriceGuideData:
     bricklink_id: str
     currency: str = "USD"
@@ -33,3 +41,4 @@ class PriceGuideData:
     # У детали Price Guide разный для каждого цвета.
     color_id: Optional[str] = None
     color_name: Optional[str] = None
+    colors: list[ColorPrices] = field(default_factory=list)

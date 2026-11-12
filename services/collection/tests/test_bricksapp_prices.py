@@ -3,6 +3,7 @@ from app.business.bricksapp_prices import (
     choose_part_color,
     extract_prices_bl,
     parse_bricksapp_price_guide,
+    select_part_colors,
 )
 
 # Как в RSC-странице BricksAPP: кавычки экранированы.
@@ -39,8 +40,21 @@ def test_part_price_uses_the_color_with_stock():
     \"color\":{\"id\":16,\"name\":\"White\"},\"quantity\":1
     """
     assert choose_part_color(page) == ("53", "Светло-серый")
+    assert [item[0] for item in select_part_colors(page)] == ["53", "16"]
     assert bricksapp_catalog_url("88646", "PART", "53").endswith("/catalog/parts/88646/53")
     assert bricksapp_catalog_url("75192-1", "SET").endswith("/catalog/sets/75192-1")
+
+
+def test_more_than_ten_colors_keeps_the_ten_with_stock():
+    bits = [
+        rf'{{\"id\":{i},\"name\":\"C{i}\",\"nameRus\":\"Цвет {i}\"}}'
+        + rf'\"color\":{{\"id\":{i}}},\"quantity\":{i}'
+        for i in range(1, 13)
+    ]
+    picked = select_part_colors("\n".join(bits))
+    assert len(picked) == 10
+    assert picked[0] == ("12", "Цвет 12")
+    assert picked[-1] == ("3", "Цвет 3")
 
 
 def test_page_without_guide_is_not_found():

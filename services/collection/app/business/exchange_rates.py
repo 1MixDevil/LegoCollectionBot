@@ -150,4 +150,7 @@ async def apply_display_currency(
     market.exchange_rate_source = "cbr"
     market.new = _convert_condition(market.new, rate)
     market.used = _convert_condition(market.used, rate)
+    for color in market.colors:
+        color.new = _convert_condition(color.new, rate)
+        color.used = _convert_condition(color.used, rate)
     return market

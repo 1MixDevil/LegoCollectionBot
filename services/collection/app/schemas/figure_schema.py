@@ -124,6 +124,13 @@ class MarketConditionPrices(BaseModel):
     avg_price_listed: Optional[float] = None
 
 
+class MarketColorPrices(BaseModel):
+    color_id: Optional[str] = None
+    color_name: Optional[str] = None
+    new: MarketConditionPrices = MarketConditionPrices()
+    used: MarketConditionPrices = MarketConditionPrices()
+
+
 class FigureMarketPrices(BaseModel):
     bricklink_id: str
     currency: str = "USD"
@@ -137,6 +144,7 @@ class FigureMarketPrices(BaseModel):
     price_guide_url: Optional[str] = None
     color_id: Optional[str] = None
     color_name: Optional[str] = None
+    colors: List[MarketColorPrices] = Field(default_factory=list)
 
 
 class FigureBrief(BaseModel):

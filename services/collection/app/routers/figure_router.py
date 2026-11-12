@@ -28,7 +28,11 @@ from app.models.figures_model import FigureToUser
 
 from app.business.bricklink_price_guide import get_market_prices, price_guide_to_dict
 from app.business.exchange_rates import apply_display_currency
-from app.schemas.figure_schema import FigureMarketPrices, MarketConditionPrices
+from app.schemas.figure_schema import (
+    FigureMarketPrices,
+    MarketColorPrices,
+    MarketConditionPrices,
+)
 
 router = APIRouter(prefix="/figure", tags=["figure"])
 
@@ -228,8 +232,7 @@ async def get_figure_market(
     data = await get_market_prices(bricklink_id.strip().lower())
     raw = price_guide_to_dict(data)
 
-    def to_cond(key: str) -> MarketConditionPrices:
-        c = raw.get(key) or {}
+    def to_cond(c: dict) -> MarketConditionPrices:
         return MarketConditionPrices(
             avg_price_6m=c.get("avg_price_6m"),
             min_price_6m=c.get("min_price_6m"),
@@ -246,11 +249,20 @@ async def get_figure_market(
         bricklink_id=bid,
         currency=raw.get("currency") or "USD",
         error=raw.get("error"),
-        new=to_cond("new"),
-        used=to_cond("used"),
+        new=to_cond(raw.get("new") or {}),
+        used=to_cond(raw.get("used") or {}),
         price_guide_url=bricklink_pg_url(bid),
         color_id=raw.get("color_id"),
         color_name=raw.get("color_name"),
+        colors=[
+            MarketColorPrices(
+                color_id=color.get("color_id"),
+                color_name=color.get("color_name"),
+                new=to_cond(color.get("new") or {}),
+                used=to_cond(color.get("used") or {}),
+            )
+            for color in (raw.get("colors") or [])
+        ],
     )
     return await apply_display_currency(market)
 

@@ -306,4 +306,13 @@ def price_guide_to_dict(data: PriceGuideData) -> dict:
         "used": cond_dict(data.used),
         "color_id": data.color_id,
         "color_name": data.color_name,
+        "colors": [
+            {
+                "color_id": color.color_id,
+                "color_name": color.color_name,
+                "new": cond_dict(color.new),
+                "used": cond_dict(color.used),
+            }
+            for color in data.colors
+        ],
     }

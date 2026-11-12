@@ -10,14 +10,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 
 from app.business.bricklink_ids import infer_item_type
-from app.business.price_guide_models import ConditionPrices, PriceGuideData
+from app.business.price_guide_models import ColorPrices, ConditionPrices, PriceGuideData
 
 logger = logging.getLogger("BricksAppPrices")
+
+MAX_PART_COLORS = 10
 
 _SECTION = {
     "MINIFIG": "minifigures",
@@ -72,23 +75,33 @@ def part_colors(html: str) -> list[tuple[str, str]]:
     return colors
 
 
-def choose_part_color(html: str) -> tuple[str | None, str | None]:
-    """Цвет с наибольшим остатком на BricksAPP, иначе первый обычный."""
-    colors = part_colors(html)
-    if not colors:
-        return None, None
+def _color_stock(html: str) -> dict[str, int]:
     stock: dict[str, int] = {}
     for match in _OFFER_QTY_RE.finditer(_loose(html)):
         color_id, qty = match.group(1), int(match.group(2))
         stock[color_id] = stock.get(color_id, 0) + qty
-    ranked = sorted(colors, key=lambda item: stock.get(item[0], 0), reverse=True)
-    for color_id, name in ranked:
-        if stock.get(color_id, 0) > 0 and not _is_modulex(name):
-            return color_id, name
-    for color_id, name in colors:
-        if not _is_modulex(name):
-            return color_id, name
-    return colors[0]
+    return stock
+
+
+def select_part_colors(html: str, limit: int = MAX_PART_COLORS) -> list[tuple[str, str]]:
+    """Все цвета, если их не больше limit, иначе limit самых ходовых."""
+    colors = part_colors(html)
+    plain = [item for item in colors if not _is_modulex(item[1])]
+    pool = plain or colors
+    if not pool:
+        return []
+    stock = _color_stock(html)
+    ranked = sorted(pool, key=lambda item: stock.get(item[0], 0), reverse=True)
+    if len(ranked) <= limit:
+        return ranked
+    if any(stock.get(item[0], 0) > 0 for item in ranked):
+        return ranked[:limit]
+    return pool[:limit]
+
+
+def choose_part_color(html: str) -> tuple[str | None, str | None]:
+    picked = select_part_colors(html, limit=1)
+    return picked[0] if picked else (None, None)
 
 
 def extract_prices_bl(html: str) -> dict | None:
@@ -220,26 +233,62 @@ async def _get_page(session, url: str) -> str:
     raise last_error or RuntimeError("BricksAPP не отдал страницу каталога")
 
 
+def _sales(new: ConditionPrices, used: ConditionPrices) -> int:
+    return (new.times_sold_6m or 0) + (used.times_sold_6m or 0)
+
+
+async def _fetch_part_colors(session, bricklink_id: str, overview: str) -> list[ColorPrices]:
+    picked = select_part_colors(overview)
+
+    async def one(color_id: str, color_name: str) -> ColorPrices | None:
+        html = await _get_page(
+            session, bricksapp_catalog_url(bricklink_id, "PART", color_id)
+        )
+        parsed = parse_bricksapp_price_guide(html, bricklink_id)
+        if parsed.error:
+            return None
+        return ColorPrices(
+            color_id=color_id,
+            color_name=color_name,
+            new=parsed.new,
+            used=parsed.used,
+        )
+
+    loaded = await asyncio.gather(
+        *(one(color_id, color_name) for color_id, color_name in picked),
+        return_exceptions=True,
+    )
+    colors: list[ColorPrices] = []
+    for item in loaded:
+        if isinstance(item, ColorPrices):
+            colors.append(item)
+        elif isinstance(item, Exception):
+            logger.debug("part color price failed", exc_info=item)
+    colors.sort(key=lambda color: _sales(color.new, color.used), reverse=True)
+    return colors
+
+
 async def fetch_price_guide_bricksapp(bricklink_id: str) -> PriceGuideData:
     import aiohttp
 
     bricklink_id = bricklink_id.strip().lower()
     item_type = infer_item_type(bricklink_id)
-    color_id: str | None = None
-    color_name: str | None = None
     async with aiohttp.ClientSession() as session:
         html = await _get_page(
             session, bricksapp_catalog_url(bricklink_id, item_type)
         )
         if item_type == "PART" and "pricesBL" not in html:
-            color_id, color_name = choose_part_color(html)
-            if color_id:
-                html = await _get_page(
-                    session,
-                    bricksapp_catalog_url(bricklink_id, item_type, color_id),
-                )
-    data = parse_bricksapp_price_guide(html, bricklink_id)
-    if color_id and not data.error:
-        data.color_id = color_id
-        data.color_name = color_name
-    return data
+            colors = await _fetch_part_colors(session, bricklink_id, html)
+            result = PriceGuideData(bricklink_id=bricklink_id, currency="USD")
+            if not colors:
+                result.error = "no_price_data"
+                return result
+            top = colors[0]
+            result.new = top.new
+            result.used = top.used
+            result.color_id = top.color_id
+            result.color_name = top.color_name
+            result.colors = colors
+            result.error = None
+            return result
+    return parse_bricksapp_price_guide(html, bricklink_id)
